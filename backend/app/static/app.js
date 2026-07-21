@@ -1,7 +1,8 @@
 const $ = (id) => document.getElementById(id);
 
 const state = {
-  threshold: 55,
+  threshold: 45,
+  period: "day",
   chart: null,
 };
 
@@ -52,6 +53,7 @@ function initChart() {
           pointRadius: 0,
           borderWidth: 1.5,
           fill: false,
+          stepped: "after",
         },
       ],
     },
@@ -94,8 +96,10 @@ function initChart() {
 async function refreshLatest() {
   try {
     const data = await fetchJson("/api/v1/latest");
-    state.threshold = data.alert_threshold_dba ?? 55;
-    $("mLimit").textContent = `${state.threshold.toFixed(0)} dBA`;
+    state.threshold = data.alert_threshold_dba ?? 45;
+    state.period = data.alert_period ?? "day";
+    const periodLabel = state.period === "night" ? "noc" : "den";
+    $("mLimit").textContent = `${state.threshold.toFixed(0)} dBA (${periodLabel})`;
 
     const online = Boolean(data.online);
     $("onlineDot").className = `dot ${online ? "on" : "off"}`;
@@ -128,6 +132,7 @@ async function refreshHistory() {
       `/api/v1/history?metric=${encodeURIComponent(metric)}&hours=${hours}`
     );
     state.threshold = data.threshold_dba ?? state.threshold;
+    state.period = data.alert_period ?? state.period;
 
     const points = (data.points || []).map((p) => ({
       x: p.t * 1000,
@@ -135,16 +140,11 @@ async function refreshHistory() {
     }));
     state.chart.data.datasets[0].data = points;
 
-    if (points.length) {
-      const t0 = points[0].x;
-      const t1 = points[points.length - 1].x;
-      state.chart.data.datasets[1].data = [
-        { x: t0, y: state.threshold },
-        { x: t1, y: state.threshold },
-      ];
-    } else {
-      state.chart.data.datasets[1].data = [];
-    }
+    const limitPts = data.threshold_points || [];
+    state.chart.data.datasets[1].data = limitPts.map((p) => ({
+      x: p.t * 1000,
+      y: p.v,
+    }));
     state.chart.update("none");
 
     const s = data.stats || {};

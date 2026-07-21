@@ -62,4 +62,4 @@ Sample rate musí zůstat **48000** — A-vážení a EQ filtry jsou spočítan�
 
 - **LAeq 1min** — hlavní metrika pro noční limity a stížnosti
 - **LAmax 1min** — špičky (spínání VZT, troubení)
-- Limit v Dockeru: `ALERT_THRESHOLD_DBA` (výchozí 55) — čárka v grafu a % času nad limitem
+- Limity v Dockeru: `ALERT_DAY_DBA=45` (6:00–22:00), `ALERT_NIGHT_DBA=40` (noční klid) — schodová čárka v grafu a % času nad limitem

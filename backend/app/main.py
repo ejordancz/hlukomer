@@ -6,9 +6,10 @@ import os
 import sqlite3
 import time
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterator, Optional
+from zoneinfo import ZoneInfo
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query
 from fastapi.responses import FileResponse
@@ -18,13 +19,64 @@ from pydantic import BaseModel, Field
 DATA_DIR = Path(os.getenv("DATA_DIR", "/data"))
 DB_PATH = DATA_DIR / "hlukomer.db"
 INGEST_API_KEY = os.getenv("INGEST_API_KEY", "changeme")
-ALERT_THRESHOLD_DBA = float(os.getenv("ALERT_THRESHOLD_DBA", "55"))
+# Denní limit 6:00–22:00, jinak noční klid
+ALERT_DAY_DBA = float(os.getenv("ALERT_DAY_DBA", "45"))
+ALERT_NIGHT_DBA = float(os.getenv("ALERT_NIGHT_DBA", "40"))
+ALERT_DAY_START_HOUR = int(os.getenv("ALERT_DAY_START_HOUR", "6"))
+ALERT_DAY_END_HOUR = int(os.getenv("ALERT_DAY_END_HOUR", "22"))
+TZ_NAME = os.getenv("TZ", "Europe/Prague")
+TZ = ZoneInfo(TZ_NAME)
 RETENTION_DAYS = int(os.getenv("RETENTION_DAYS", "90"))
 LIVE_RETENTION_DAYS = int(os.getenv("LIVE_RETENTION_DAYS", "7"))
 
 STATIC_DIR = Path(__file__).parent / "static"
 
 app = FastAPI(title="Hlukoměr", version="1.0.0")
+
+
+def is_daytime(ts: float) -> bool:
+    hour = datetime.fromtimestamp(ts, tz=TZ).hour
+    return ALERT_DAY_START_HOUR <= hour < ALERT_DAY_END_HOUR
+
+
+def threshold_at(ts: float) -> float:
+    return ALERT_DAY_DBA if is_daytime(ts) else ALERT_NIGHT_DBA
+
+
+def threshold_meta(ts: Optional[float] = None) -> dict[str, Any]:
+    now = ts if ts is not None else utc_now()
+    day = is_daytime(now)
+    return {
+        "alert_threshold_dba": threshold_at(now),
+        "alert_period": "day" if day else "night",
+        "thresholds": {
+            "day_dba": ALERT_DAY_DBA,
+            "night_dba": ALERT_NIGHT_DBA,
+            "day_start_hour": ALERT_DAY_START_HOUR,
+            "day_end_hour": ALERT_DAY_END_HOUR,
+            "timezone": TZ_NAME,
+        },
+    }
+
+
+def build_threshold_line(t0: float, t1: float) -> list[dict[str, float]]:
+    """Schodová řada limitu pro graf (denní / noční)."""
+    if t1 < t0:
+        return []
+    points: list[dict[str, float]] = [{"t": t0, "v": threshold_at(t0)}]
+    local0 = datetime.fromtimestamp(t0, tz=TZ)
+    day = local0.replace(hour=0, minute=0, second=0, microsecond=0)
+    end_local = datetime.fromtimestamp(t1, tz=TZ)
+    while day <= end_local + timedelta(days=1):
+        for hour in (ALERT_DAY_START_HOUR, ALERT_DAY_END_HOUR):
+            boundary = day.replace(hour=hour, minute=0, second=0, microsecond=0)
+            ts = boundary.timestamp()
+            if t0 < ts <= t1:
+                points.append({"t": ts, "v": threshold_at(ts)})
+        day += timedelta(days=1)
+    if points[-1]["t"] < t1:
+        points.append({"t": t1, "v": threshold_at(t1)})
+    return points
 
 
 class IngestPayload(BaseModel):
@@ -144,7 +196,7 @@ def ingest(payload: IngestPayload, _: None = Depends(require_api_key)) -> dict[s
 @app.get("/api/v1/latest")
 def latest(device_id: str = Query(default="hlukomer")) -> dict[str, Any]:
     metrics = ("laeq_1s", "laeq_1min", "lamax_1min", "lamin_1min")
-    out: dict[str, Any] = {"device_id": device_id, "metrics": {}, "alert_threshold_dba": ALERT_THRESHOLD_DBA}
+    out: dict[str, Any] = {"device_id": device_id, "metrics": {}, **threshold_meta()}
     with db() as conn:
         for metric in metrics:
             row = conn.execute(
@@ -200,19 +252,26 @@ def history(
     values = [p["v"] for p in points]
     stats: dict[str, Any] = {}
     if values:
+        above = sum(1 for p in points if p["v"] >= threshold_at(p["t"]))
         stats = {
             "min": min(values),
             "max": max(values),
             "avg": sum(values) / len(values),
             "count": len(values),
-            "above_threshold_pct": 100.0 * sum(1 for v in values if v >= ALERT_THRESHOLD_DBA) / len(values),
+            "above_threshold_pct": 100.0 * above / len(values),
         }
 
+    t0 = points[0]["t"] if points else since
+    t1 = points[-1]["t"] if points else utc_now()
+    meta = threshold_meta()
     return {
         "metric": metric,
         "device_id": device_id,
         "hours": hours,
-        "threshold_dba": ALERT_THRESHOLD_DBA,
+        "threshold_dba": meta["alert_threshold_dba"],
+        "alert_period": meta["alert_period"],
+        "thresholds": meta["thresholds"],
+        "threshold_points": build_threshold_line(t0, t1),
         "points": points,
         "stats": stats,
     }

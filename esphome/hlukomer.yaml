@@ -5,9 +5,9 @@
 substitutions:
   device_name: hlukomer
   # IP/hostname Docker služby (stejná LAN jako ESP)
-  api_base_url: "http://192.168.1.100:8080"
+  api_base_url: "http://192.168.1.20:8080"
   # Po kalibraci: kladný = reportuje vyšší dB (viz CALIBRATION.md)
-  calibration_offset: "0dB"
+  calibration_offset: "-2dB"
 
 esphome:
   name: ${device_name}

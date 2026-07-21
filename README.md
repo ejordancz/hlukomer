@@ -18,7 +18,7 @@ Měří **LAeq / LAmax / LAmin** (A-vážení, dB SPL) přes komponentu [esphome
 
 ```bash
 cp .env.example .env
-# nastav INGEST_API_KEY a volitelně ALERT_THRESHOLD_DBA
+# nastav INGEST_API_KEY; limity: ALERT_DAY_DBA / ALERT_NIGHT_DBA (6–22 / noc)
 
 docker compose up -d --build
 ```

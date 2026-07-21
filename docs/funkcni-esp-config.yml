@@ -1,0 +1,50 @@
+esphome:
+  name: hlukomer
+
+esp32:
+  board: esp32-s3-devkitc-1
+  framework:
+    type: esp-idf
+
+wifi:
+  ssid: NSA
+  password: kapverdy
+
+api:
+
+web_server:
+
+ota:
+  - platform: esphome
+    id: ota_esphome_1
+
+i2s_audio:
+  - id: i2s_in
+    i2s_bclk_pin: GPIO4
+    i2s_lrclk_pin: GPIO5
+
+microphone:
+  - platform: i2s_audio
+    id: mic
+    i2s_audio_id: i2s_in
+    i2s_din_pin: GPIO6
+    adc_type: external
+    pdm: false
+    sample_rate: 16000
+    bits_per_sample: 32bit
+    channel: left
+
+logger:
+  level: VERY_VERBOSE
+
+sensor:
+  - platform: sound_level
+    microphone: mic
+    passive: false
+    measurement_duration: 1s
+
+    rms:
+      name: "Hluk RMS"
+
+    peak:
+      name: "Hluk Peak"
