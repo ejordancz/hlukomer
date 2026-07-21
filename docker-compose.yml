@@ -1,0 +1,23 @@
+services:
+  hlukomer:
+    build: ./backend
+    container_name: hlukomer
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      INGEST_API_KEY: ${INGEST_API_KEY:-changeme}
+      ALERT_THRESHOLD_DBA: ${ALERT_THRESHOLD_DBA:-55}
+      RETENTION_DAYS: ${RETENTION_DAYS:-90}
+      LIVE_RETENTION_DAYS: ${LIVE_RETENTION_DAYS:-7}
+      DATA_DIR: /data
+    volumes:
+      - hlukomer_data:/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/api/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  hlukomer_data:

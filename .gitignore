@@ -1,0 +1,8 @@
+.env
+esphome/secrets.yaml
+__pycache__/
+*.pyc
+.venv/
+data/
+*.db
+.DS_Store

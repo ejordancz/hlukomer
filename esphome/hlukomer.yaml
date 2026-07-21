@@ -1,0 +1,184 @@
+# Hlukoměr — ESP32-S3 + Adafruit ICS-43434
+# Flash: esphome run esphome/hlukomer.yaml
+# Secrets: esphome/secrets.yaml (viz secrets.yaml.example)
+
+substitutions:
+  device_name: hlukomer
+  # IP/hostname Docker služby (stejná LAN jako ESP)
+  api_base_url: "http://192.168.1.100:8080"
+  # Po kalibraci: kladný = reportuje vyšší dB (viz CALIBRATION.md)
+  calibration_offset: "0dB"
+
+esphome:
+  name: ${device_name}
+  friendly_name: Hlukoměr
+
+esp32:
+  board: esp32-s3-devkitc-1
+  cpu_frequency: 240MHz
+  framework:
+    type: esp-idf
+
+# A-vážení, LAeq, kalibrace dB SPL, EQ pro ICS-43434
+external_components:
+  - source: github://stas-sl/esphome-sound-level-meter@dev
+    components: [sound_level_meter]
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  # Při vysokém noise floor zkus 8.5dB (méně RF šumu)
+  output_power: 15dB
+  ap:
+    ssid: "Hlukomer Fallback"
+    password: !secret ap_password
+
+captive_portal:
+
+logger:
+  level: INFO
+
+api:
+  encryption:
+    key: !secret api_encryption_key
+
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+web_server:
+  port: 80
+
+http_request:
+  useragent: hlukomer/1.0
+  timeout: 5s
+  verify_ssl: false
+
+i2s_audio:
+  - id: i2s_in
+    i2s_bclk_pin: GPIO4
+    i2s_lrclk_pin: GPIO5
+
+microphone:
+  - platform: i2s_audio
+    id: mic
+    i2s_audio_id: i2s_in
+    adc_type: external
+    i2s_din_pin: GPIO6
+    pdm: false
+    sample_rate: 48000
+    bits_per_sample: 32bit
+    channel: left
+    i2s_mode: primary
+
+# ICS-43434 datasheet: −26 dBFS @ 94 dB SPL
+sound_level_meter:
+  id: slm
+  microphone:
+    microphone: mic
+    bits_per_sample: 32
+  update_interval: 60s
+  auto_start: true
+  warmup_interval: 500ms
+  use_esp_dsp: true
+  mic_sensitivity: -26dB
+  mic_sensitivity_ref: 94dB
+  offset: ${calibration_offset}
+
+  dsp_filters:
+    - id: f_ics43434
+      type: sos
+      coeffs:
+        - [0.47732642, 0.46294358, 0.11224797, 0.06681948, 0.00111522]
+        - [1.0, -1.9890593, 0.98908925, -1.9975533, 0.99755484]
+    - id: f_a
+      type: sos
+      coeffs:
+        - [0.16999495, 0.741029, 0.52548885, -0.11321865, -0.056549273]
+        - [1.0, -2.00027, 1.0002706, -0.03433284, -0.79215795]
+        - [1.0, -0.709303, -0.29071867, -1.9822421, 0.9822986]
+
+  sensors:
+    - type: eq
+      name: LAeq 1s
+      id: laeq_1s
+      unit_of_measurement: dBA
+      accuracy_decimals: 1
+      update_interval: 1s
+      dsp_filters: [f_ics43434, f_a]
+      on_value:
+        then:
+          - http_request.post:
+              url: ${api_base_url}/api/v1/ingest
+              request_headers:
+                Content-Type: application/json
+                X-Api-Key: !secret ingest_api_key
+              json: |-
+                root["device_id"] = "${device_name}";
+                root["kind"] = "live";
+                root["laeq_1s"] = x;
+
+    - type: eq
+      name: LAeq 1min
+      id: laeq_1min
+      unit_of_measurement: dBA
+      accuracy_decimals: 1
+      update_interval: 60s
+      dsp_filters: [f_ics43434, f_a]
+      on_value:
+        then:
+          - delay: 200ms
+          - http_request.post:
+              url: ${api_base_url}/api/v1/ingest
+              request_headers:
+                Content-Type: application/json
+                X-Api-Key: !secret ingest_api_key
+              json: |-
+                root["device_id"] = "${device_name}";
+                root["kind"] = "minute";
+                root["laeq_1min"] = id(laeq_1min).state;
+                root["lamax_1min"] = id(lamax_1min).state;
+                root["lamin_1min"] = id(lamin_1min).state;
+
+    - type: max
+      name: LAmax 1s/1min
+      id: lamax_1min
+      window_size: 1s
+      unit_of_measurement: dBA
+      accuracy_decimals: 1
+      update_interval: 60s
+      dsp_filters: [f_ics43434, f_a]
+
+    - type: min
+      name: LAmin 1s/1min
+      id: lamin_1min
+      window_size: 1s
+      unit_of_measurement: dBA
+      accuracy_decimals: 1
+      update_interval: 60s
+      dsp_filters: [f_ics43434, f_a]
+
+sensor:
+  - platform: wifi_signal
+    name: WiFi Signal
+    update_interval: 60s
+  - platform: uptime
+    name: Uptime
+    update_interval: 60s
+
+text_sensor:
+  - platform: wifi_info
+    ip_address:
+      name: IP Address
+
+switch:
+  - platform: template
+    name: Měření zapnuto
+    id: measurement_switch
+    icon: mdi:microphone
+    restore_mode: DISABLED
+    lambda: "return id(slm).is_running();"
+    turn_on_action:
+      - sound_level_meter.start: slm
+    turn_off_action:
+      - sound_level_meter.stop: slm
