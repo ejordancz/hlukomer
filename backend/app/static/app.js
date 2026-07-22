@@ -35,6 +35,8 @@ const LF_BANDS = new Set([
 
 const SPEC_HEIGHT = 360;
 
+const API_LOG_MAX = 80;
+
 const state = {
   threshold: 45,
   period: "day",
@@ -44,6 +46,8 @@ const state = {
   selectedTs: null,
   spectrogram: null,
   hoverCol: null,
+  apiLogEntries: [],
+  apiLogWin: null,
 };
 
 function fmtDb(v) {
@@ -104,10 +108,218 @@ function updateOverLimit(laeq) {
   sub.textContent = `dB ${over ? "nad" : "pod"} ${state.threshold.toFixed(0)} dBA (${periodLabel})`;
 }
 
+function appendApiLog(url, payload, error) {
+  const ts = new Date().toLocaleTimeString("cs-CZ", {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+  const body = error
+    ? String(error)
+    : JSON.stringify(payload, null, 2);
+  state.apiLogEntries.push({ ts, url, body, error: Boolean(error) });
+  if (state.apiLogEntries.length > API_LOG_MAX) {
+    state.apiLogEntries.splice(0, state.apiLogEntries.length - API_LOG_MAX);
+  }
+  renderApiLogPopup();
+}
+
+function escapeHtml(s) {
+  return String(s)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+function apiLogEntriesHtml() {
+  const entries = state.apiLogEntries;
+  if (!entries.length) return "Zatím žádná data.";
+  return entries
+    .map((e) => {
+      const meta = e.error
+        ? `${e.ts} · ${e.url} · CHYBA`
+        : `${e.ts} · ${e.url}`;
+      return (
+        `<div class="entry">` +
+        `<div class="meta">${escapeHtml(meta)}</div>` +
+        `<pre>${escapeHtml(e.body)}</pre>` +
+        `</div>`
+      );
+    })
+    .join("");
+}
+
+function apiLogPopupShellHtml() {
+  return `<!DOCTYPE html>
+<html lang="cs">
+<head>
+  <meta charset="utf-8" />
+  <title>Hlukoměr · API log</title>
+  <style>
+    :root {
+      --bg: #0c1412;
+      --ink: #e8f0ec;
+      --muted: #8fa399;
+      --line: rgba(232, 240, 236, 0.12);
+      --accent: #c4f082;
+    }
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0;
+      min-height: 100%;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: "IBM Plex Mono", ui-monospace, monospace;
+    }
+    header {
+      position: sticky;
+      top: 0;
+      z-index: 1;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.75rem;
+      padding: 0.75rem 1rem;
+      border-bottom: 1px solid var(--line);
+      background: rgba(12, 20, 18, 0.95);
+      backdrop-filter: blur(6px);
+    }
+    h1 {
+      margin: 0;
+      font-size: 0.95rem;
+      font-weight: 500;
+      letter-spacing: 0.02em;
+    }
+    button {
+      appearance: none;
+      background: transparent;
+      color: var(--accent);
+      border: 1px solid rgba(196, 240, 130, 0.35);
+      border-radius: 0.35rem;
+      padding: 0.35rem 0.65rem;
+      font: inherit;
+      font-size: 0.78rem;
+      cursor: pointer;
+    }
+    button:hover {
+      background: rgba(196, 240, 130, 0.08);
+      border-color: rgba(196, 240, 130, 0.55);
+    }
+    #log {
+      padding: 0.85rem 1rem 1.5rem;
+      font-size: 0.72rem;
+      line-height: 1.45;
+      color: var(--muted);
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .entry + .entry {
+      margin-top: 0.85rem;
+      padding-top: 0.85rem;
+      border-top: 1px solid var(--line);
+    }
+    .meta {
+      color: var(--accent);
+      margin-bottom: 0.35rem;
+    }
+    pre {
+      margin: 0;
+      font: inherit;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>API log · surová data</h1>
+    <button type="button" id="clearBtn">Vymazat</button>
+  </header>
+  <div id="log">${apiLogEntriesHtml()}</div>
+</body>
+</html>`;
+}
+
+function isApiLogPopupOpen() {
+  return state.apiLogWin && !state.apiLogWin.closed;
+}
+
+function bindApiLogPopup() {
+  const win = state.apiLogWin;
+  if (!isApiLogPopupOpen()) return;
+  const btn = win.document.getElementById("clearBtn");
+  if (btn && !btn.dataset.bound) {
+    btn.dataset.bound = "1";
+    btn.addEventListener("click", () => clearApiLog());
+  }
+}
+
+function renderApiLogPopup() {
+  if (!isApiLogPopupOpen()) return;
+  const win = state.apiLogWin;
+  const logEl = win.document.getElementById("log");
+  if (!logEl) {
+    win.document.open();
+    win.document.write(apiLogPopupShellHtml());
+    win.document.close();
+    bindApiLogPopup();
+    return;
+  }
+  const nearBottom =
+    win.innerHeight + win.scrollY >= win.document.body.scrollHeight - 80;
+  logEl.innerHTML = apiLogEntriesHtml();
+  if (nearBottom) {
+    win.scrollTo(0, win.document.body.scrollHeight);
+  }
+}
+
+function openApiLogPopup() {
+  if (isApiLogPopupOpen()) {
+    state.apiLogWin.focus();
+    renderApiLogPopup();
+    return;
+  }
+  const win = window.open(
+    "",
+    "hlukomer-api-log",
+    "width=780,height=640,menubar=no,toolbar=no,location=no,status=no,resizable=yes,scrollbars=yes"
+  );
+  if (!win) {
+    window.alert(
+      "Prohlížeč zablokoval popup. Povolte vyskakovací okna pro tuto stránku."
+    );
+    return;
+  }
+  state.apiLogWin = win;
+  win.document.open();
+  win.document.write(apiLogPopupShellHtml());
+  win.document.close();
+  bindApiLogPopup();
+  win.focus();
+}
+
+function clearApiLog() {
+  state.apiLogEntries = [];
+  renderApiLogPopup();
+}
+
 async function fetchJson(url) {
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`${res.status} ${url}`);
-  return res.json();
+  try {
+    const res = await fetch(url);
+    if (!res.ok) {
+      const err = new Error(`${res.status} ${url}`);
+      appendApiLog(url, null, err.message);
+      throw err;
+    }
+    const data = await res.json();
+    appendApiLog(url, data);
+    return data;
+  } catch (err) {
+    if (!String(err.message || "").includes(url)) {
+      appendApiLog(url, null, err.message || err);
+    }
+    throw err;
+  }
 }
 
 /** Viridis-ish: quiet → loud */
@@ -203,10 +415,10 @@ function initChart() {
         {
           label: "limit",
           data: [],
-          borderColor: "rgba(240, 163, 90, 0.85)",
-          borderDash: [6, 6],
+          borderColor: "#ff2d95",
+          borderDash: [],
           pointRadius: 0,
-          borderWidth: 1.5,
+          borderWidth: 2.5,
           fill: false,
           // "before": úsek mezi body drží y levého bodu (hodnota platí od daného času dál).
           // Společně s dvojicí bodů na hranici den/noc z API vznikne správný schod.
@@ -371,6 +583,33 @@ async function refreshLatest() {
   }
 }
 
+/** Svislé čáry na hranicích denního/nočního limitu (bez stínování heatmapy). */
+function drawSpectrogramLimitChanges(ctx, w, h, cols, nightBands) {
+  if (!cols?.length || !nightBands?.length) return;
+  const tMin = cols[0].t;
+  const tMax = cols[cols.length - 1].t;
+  if (tMax <= tMin) return;
+
+  const toX = (t) => Math.max(0, Math.min(w, ((t - tMin) / (tMax - tMin)) * w));
+  const edges = new Set();
+  for (const band of nightBands) {
+    edges.add(band.t0);
+    edges.add(band.t1);
+  }
+
+  // Magenta — mimo viridis (fialová→modrá→tyrkys→zelená→žlutá)
+  ctx.strokeStyle = "#ff2d95";
+  ctx.lineWidth = 2.5;
+  for (const t of edges) {
+    if (t <= tMin || t >= tMax) continue;
+    const x = Math.round(toX(t)) + 0.5;
+    ctx.beginPath();
+    ctx.moveTo(x, 0);
+    ctx.lineTo(x, h);
+    ctx.stroke();
+  }
+}
+
 function drawSpectrogram() {
   const canvas = $("spectrogram");
   const wrap = canvas.parentElement;
@@ -429,6 +668,8 @@ function drawSpectrogram() {
       );
     }
   }
+
+  drawSpectrogramLimitChanges(ctx, w, h, cols, data.night_bands);
 
   // selection / hover marker
   const markCol =
@@ -600,6 +841,7 @@ function bind() {
   });
   $("metricSelect").addEventListener("change", refreshHistory);
   $("fftLiveBtn").addEventListener("click", clearSpectrogramSelection);
+  $("apiLogOpen").addEventListener("click", openApiLogPopup);
 
   const canvas = $("spectrogram");
   canvas.addEventListener("click", (ev) => {

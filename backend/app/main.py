@@ -649,6 +649,8 @@ def spectrum_history(
             ]
             hz = [31.5, 63.0, 125.0, 250.0, 500.0, 1000.0, 2000.0, 4000.0, 8000.0, 16000.0]
             note = "Legacy 10 oktáv (starý firmware). Po flashi ESP uvidíš 1/3-oktávu v basu."
+    t0 = columns[0]["t"] if columns else since
+    t1 = columns[-1]["t"] if columns else utc_now()
     return {
         "device_id": device_id,
         "hours": hours,
@@ -658,6 +660,7 @@ def spectrum_history(
         "columns": columns,
         "vmin": round(vmin, 1) if vmin is not None else None,
         "vmax": round(vmax, 1) if vmax is not None else None,
+        "night_bands": build_night_bands(t0, t1),
         "note": note,
     }
 
