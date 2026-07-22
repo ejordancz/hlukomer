@@ -211,8 +211,36 @@ def threshold_meta(ts: Optional[float] = None) -> dict[str, Any]:
     }
 
 
+def build_night_bands(t0: float, t1: float) -> list[dict[str, float]]:
+    """Intervaly noci [t0, t1] pro stínování pozadí grafu."""
+    if t1 < t0:
+        return []
+    bands: list[dict[str, float]] = []
+    local0 = datetime.fromtimestamp(t0, tz=TZ)
+    day = local0.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=1)
+    end_local = datetime.fromtimestamp(t1, tz=TZ)
+    while day <= end_local + timedelta(days=1):
+        night_start = day.replace(
+            hour=ALERT_DAY_END_HOUR, minute=0, second=0, microsecond=0
+        )
+        night_end = (day + timedelta(days=1)).replace(
+            hour=ALERT_DAY_START_HOUR, minute=0, second=0, microsecond=0
+        )
+        a = max(night_start.timestamp(), t0)
+        b = min(night_end.timestamp(), t1)
+        if a < b:
+            bands.append({"t0": a, "t1": b})
+        day += timedelta(days=1)
+    return bands
+
+
 def build_threshold_line(t0: float, t1: float) -> list[dict[str, float]]:
-    """Schodová řada limitu pro graf (denní / noční)."""
+    """Schodová řada limitu pro graf (denní / noční).
+
+    Na každé hranici dne/noci vloží dvojici bodů se stejným časem
+    (stará → nová hodnota), aby Chart.js vykreslil svislý schod
+    bez závislosti na stepped before/after.
+    """
     if t1 < t0:
         return []
     points: list[dict[str, float]] = [{"t": t0, "v": threshold_at(t0)}]
@@ -224,7 +252,11 @@ def build_threshold_line(t0: float, t1: float) -> list[dict[str, float]]:
             boundary = day.replace(hour=hour, minute=0, second=0, microsecond=0)
             ts = boundary.timestamp()
             if t0 < ts <= t1:
-                points.append({"t": ts, "v": threshold_at(ts)})
+                new_v = threshold_at(ts)
+                prev_v = points[-1]["v"]
+                if new_v != prev_v:
+                    points.append({"t": ts, "v": prev_v})
+                    points.append({"t": ts, "v": new_v})
         day += timedelta(days=1)
     if points[-1]["t"] < t1:
         points.append({"t": t1, "v": threshold_at(t1)})
@@ -565,7 +597,7 @@ def latest(device_id: str = Query(default="hlukomer")) -> dict[str, Any]:
 
 @app.get("/api/v1/spectrum/history")
 def spectrum_history(
-    hours: float = Query(default=6, ge=0.1, le=24 * 7),
+    hours: float = Query(default=6, ge=0.1, le=24 * 90),
     device_id: str = Query(default="hlukomer"),
     max_columns: int = Query(default=360, ge=10, le=2000),
 ) -> dict[str, Any]:
@@ -585,7 +617,7 @@ def spectrum_history(
     bands = list(SPECTRUM_BANDS)
     labels = list(SPECTRUM_LABELS)
     hz = list(SPECTRUM_HZ)
-    note = "1/3-oktáva 25–250 Hz + oktávy výš (IIR). Trvalá čára = tón (např. 50/63 Hz)."
+    note = "1/3-oktáva 25–250 Hz + oktávy výš (IIR). Trvalá čára = tón (např. 250 Hz nebo 50/63 Hz)."
     if not columns:
         # Do přeflashování ESP: legacy 10 oktáv
         leg_ph = ",".join("?" * len(LEGACY_SPECTRUM_METRICS))
@@ -692,6 +724,7 @@ def history(
         "alert_period": meta["alert_period"],
         "thresholds": meta["thresholds"],
         "threshold_points": build_threshold_line(t0, t1),
+        "night_bands": build_night_bands(t0, t1),
         "points": points,
         "stats": stats,
     }

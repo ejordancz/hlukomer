@@ -39,6 +39,7 @@ const state = {
   threshold: 45,
   period: "day",
   chart: null,
+  nightBands: [],
   liveSpectrum: null,
   selectedTs: null,
   spectrogram: null,
@@ -81,6 +82,28 @@ function setHvacClass(el, score) {
   else el.classList.add("hvac-low");
 }
 
+function updateOverLimit(laeq) {
+  const el = $("mOverLimit");
+  const sub = $("mOverLimitSub");
+  const label = $("mOverLimitLabel");
+  const periodLabel = state.period === "night" ? "noc" : "den";
+  if (laeq == null || state.threshold == null) {
+    el.textContent = "—.—";
+    el.classList.remove("over-limit", "under-limit");
+    label.textContent = "Od limitu";
+    sub.textContent = "dB vs limit";
+    return;
+  }
+  const delta = laeq - state.threshold;
+  const over = delta >= 0;
+  const sign = over ? "+" : "−";
+  el.textContent = `${sign}${Math.abs(delta).toFixed(1)}`;
+  el.classList.toggle("over-limit", over);
+  el.classList.toggle("under-limit", !over);
+  label.textContent = over ? "Nad limitem" : "Pod limitem";
+  sub.textContent = `dB ${over ? "nad" : "pod"} ${state.threshold.toFixed(0)} dBA (${periodLabel})`;
+}
+
 async function fetchJson(url) {
   const res = await fetch(url);
   if (!res.ok) throw new Error(`${res.status} ${url}`);
@@ -113,10 +136,58 @@ function dbToColor(t) {
   return `rgb(${r},${g},${bl})`;
 }
 
+/** Stínování den/noc v pozadí grafu (za datovými řadami). */
+const dayNightBandsPlugin = {
+  id: "dayNightBands",
+  beforeDatasetsDraw(chart) {
+    const bands = state.nightBands;
+    const { ctx, chartArea, scales } = chart;
+    const x = scales.x;
+    if (!chartArea || !x) return;
+
+    const width = chartArea.right - chartArea.left;
+    const height = chartArea.bottom - chartArea.top;
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(chartArea.left, chartArea.top, width, height);
+    ctx.clip();
+
+    // Den — jemný zelený nádech přes celou plochu
+    ctx.fillStyle = "rgba(126, 200, 163, 0.10)";
+    ctx.fillRect(chartArea.left, chartArea.top, width, height);
+
+    // Noc — výrazně tmavší pásy
+    if (bands.length) {
+      ctx.fillStyle = "rgba(2, 6, 14, 0.62)";
+      for (const band of bands) {
+        const x0 = x.getPixelForValue(band.t0 * 1000);
+        const x1 = x.getPixelForValue(band.t1 * 1000);
+        const left = Math.max(chartArea.left, Math.min(x0, x1));
+        const right = Math.min(chartArea.right, Math.max(x0, x1));
+        if (right - left < 0.5) continue;
+        ctx.fillRect(left, chartArea.top, right - left, height);
+
+        // tenká hrana na přechodu den↔noc
+        ctx.strokeStyle = "rgba(196, 240, 130, 0.22)";
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(left + 0.5, chartArea.top);
+        ctx.lineTo(left + 0.5, chartArea.bottom);
+        ctx.moveTo(right - 0.5, chartArea.top);
+        ctx.lineTo(right - 0.5, chartArea.bottom);
+        ctx.stroke();
+      }
+    }
+    ctx.restore();
+  },
+};
+
 function initChart() {
   const ctx = $("chart").getContext("2d");
   state.chart = new Chart(ctx, {
     type: "line",
+    plugins: [dayNightBandsPlugin],
     data: {
       datasets: [
         {
@@ -137,7 +208,9 @@ function initChart() {
           pointRadius: 0,
           borderWidth: 1.5,
           fill: false,
-          stepped: "after",
+          // "before": úsek mezi body drží y levého bodu (hodnota platí od daného času dál).
+          // Společně s dvojicí bodů na hranici den/noc z API vznikne správný schod.
+          stepped: "before",
         },
       ],
     },
@@ -268,7 +341,7 @@ async function refreshLatest() {
     state.threshold = data.alert_threshold_dba ?? 45;
     state.period = data.alert_period ?? "day";
     const periodLabel = state.period === "night" ? "noc" : "den";
-    $("mLimit").textContent = `${state.threshold.toFixed(0)} dBA (${periodLabel})`;
+    $("statLimit").textContent = `${state.threshold.toFixed(0)} dBA (${periodLabel})`;
 
     const online = Boolean(data.online);
     $("onlineDot").className = `dot ${online ? "on" : "off"}`;
@@ -281,11 +354,10 @@ async function refreshLatest() {
       const age = Math.max(0, Math.round(Date.now() / 1000 - live.ts));
       $("liveMeta").textContent =
         age < 5 ? "právě teď" : `naposledy před ${age} s`;
+      updateOverLimit(live.value);
+    } else {
+      updateOverLimit(null);
     }
-
-    $("mLaeq").textContent = fmtDb(data.metrics?.laeq_1min?.value);
-    $("mLamax").textContent = fmtDb(data.metrics?.lamax_1min?.value);
-    $("mLamin").textContent = fmtDb(data.metrics?.lamin_1min?.value);
 
     state.liveSpectrum = data.spectrum || null;
     if (state.selectedTs == null) {
@@ -470,7 +542,7 @@ function clearSpectrogramSelection() {
 }
 
 async function refreshSpectrogram() {
-  const hours = $("specRangeSelect").value;
+  const hours = $("rangeSelect").value;
   try {
     const data = await fetchJson(
       `/api/v1/spectrum/history?hours=${hours}&max_columns=480`
@@ -494,6 +566,7 @@ async function refreshHistory() {
     );
     state.threshold = data.threshold_dba ?? state.threshold;
     state.period = data.alert_period ?? state.period;
+    state.nightBands = data.night_bands || [];
 
     const points = (data.points || []).map((p) => ({
       x: p.t * 1000,
@@ -519,13 +592,13 @@ async function refreshHistory() {
 }
 
 function bind() {
-  $("rangeSelect").addEventListener("change", refreshHistory);
-  $("metricSelect").addEventListener("change", refreshHistory);
-  $("specRangeSelect").addEventListener("change", () => {
+  $("rangeSelect").addEventListener("change", () => {
     state.selectedTs = null;
     state.selectedSpectrum = null;
+    refreshHistory();
     refreshSpectrogram();
   });
+  $("metricSelect").addEventListener("change", refreshHistory);
   $("fftLiveBtn").addEventListener("click", clearSpectrogramSelection);
 
   const canvas = $("spectrogram");

@@ -7,9 +7,9 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,700&family=IBM+Plex+Mono:wght@400;500&family=Sora:wght@400;500;600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/static/style.css?v=11" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.9/dist/chart.umd.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
-  <link rel="stylesheet" href="/static/style.css" />
 </head>
 <body>
   <div class="bg" aria-hidden="true"></div>
@@ -38,72 +38,42 @@
 
     <section class="derived" aria-label="Analýza spektra">
       <div class="derived-card">
+        <span class="derived-label" id="mOverLimitLabel">Od limitu</span>
+        <strong class="derived-value" id="mOverLimit">—.—</strong>
+        <span class="derived-unit" id="mOverLimitSub">dB vs limit</span>
+        <span class="derived-hint">O kolik dB živý LAeq (1 s) překračuje nebo je pod denním/nočním limitem.</span>
+      </div>
+      <div class="derived-card">
         <span class="derived-label">Celková hladina</span>
         <strong class="derived-value" id="mTotal">—.—</strong>
         <span class="derived-unit">dB · bez A-vážení</span>
+        <span class="derived-hint">Součet celého spektra včetně basů; A-filtr ucha basy potlačuje, proto bývá vyšší než LAeq.</span>
       </div>
       <div class="derived-card">
         <span class="derived-label">Low Frequency Index</span>
         <strong class="derived-value" id="mLfi">—.—</strong>
         <span class="derived-unit">dB · 20–200 Hz</span>
+        <span class="derived-hint">Síla basů (20–200 Hz). Typické pro VZT, ventilátory a dunění z ulice.</span>
       </div>
       <div class="derived-card">
         <span class="derived-label">Dominantní frekvence</span>
         <strong class="derived-value" id="mDom">—</strong>
         <span class="derived-unit" id="mDomSub">oktávové pásmo</span>
+        <span class="derived-hint">Pásmo s nejsilnějším tónem právě teď — u VZT často 50/63 Hz (motor) nebo ~250 Hz (hluk vzduchu/ventilátoru).</span>
       </div>
       <div class="derived-card">
         <span class="derived-label">HVAC Score</span>
         <strong class="derived-value" id="mHvac">—</strong>
         <span class="derived-unit">0–100 · bas + tonalita</span>
+        <span class="derived-hint">Jak moc spektrum vypadá jako vzduchotechnika (basy + stálý tón). Čím výš, tím podezřelejší VZT.</span>
       </div>
-    </section>
-
-    <section class="spectrogram-section" aria-label="Spectrogram">
-      <div class="spectrum-head">
-        <div>
-          <h2>Spectrogram</h2>
-          <p class="spectrum-hint">heatmapa · 1/3-oktáva v basu (50/63 Hz jako tenká čára) · klik = spektrum okamžiku</p>
-        </div>
-        <label class="spec-range">
-          Rozsah
-          <select id="specRangeSelect">
-            <option value="1">1 hodina</option>
-            <option value="6" selected>6 hodin</option>
-            <option value="24">24 hodin</option>
-            <option value="168">7 dní</option>
-          </select>
-        </label>
-      </div>
-      <div class="spectrogram-wrap">
-        <div class="spectrogram-y" id="specYLabels" aria-hidden="true"></div>
-        <div class="spectrogram-canvas-wrap">
-          <canvas id="spectrogram" width="900" height="280" role="img" aria-label="Spectrogram"></canvas>
-          <div class="spectrogram-cursor" id="specCursor" hidden></div>
-        </div>
-        <div class="spectrogram-scale" id="specScale" aria-hidden="true"></div>
-      </div>
-      <div class="spectrogram-x" id="specXLabels"></div>
-      <p class="spectrogram-note" id="specNote">
-        Trvalá vodorovná čára (např. 50 nebo 63 Hz) = stálý tón ventilátoru/VZT; zesílení večer je na heatmapě vidět lépe než z jedné hodnoty dB.
-      </p>
-    </section>
-
-    <section class="fft-section" aria-label="Spektrum okamžiku">
-      <div class="spectrum-head">
-        <div>
-          <h2>Spektrum okamžiku</h2>
-          <p class="spectrum-hint" id="fftHint">1/3-oktáva + oktávy · živě (klikni na spectrogram pro jiný čas)</p>
-        </div>
-        <button type="button" class="ghost-btn" id="fftLiveBtn" hidden>Živě</button>
-      </div>
-      <div class="spectrum-bars" id="spectrumBars"></div>
     </section>
 
     <section class="controls">
       <label>
         Rozsah
         <select id="rangeSelect">
+          <option value="0.1667">10 minut</option>
           <option value="1">1 hodina</option>
           <option value="6">6 hodin</option>
           <option value="24" selected>24 hodin</option>
@@ -123,6 +93,11 @@
     </section>
 
     <section class="chart-wrap">
+      <div class="chart-legend" aria-hidden="true">
+        <span class="chart-legend-item"><span class="swatch day"></span>den</span>
+        <span class="chart-legend-item"><span class="swatch night"></span>noc</span>
+        <span class="chart-legend-item"><span class="swatch limit"></span>limit</span>
+      </div>
       <canvas id="chart" height="120"></canvas>
     </section>
 
@@ -143,19 +118,65 @@
         <span class="stat-label">Nad limitem</span>
         <span class="stat-value" id="statAbove">—</span>
       </div>
+      <div class="stat">
+        <span class="stat-label">Limit</span>
+        <span class="stat-value" id="statLimit">—</span>
+      </div>
     </section>
 
-    <section class="minute">
-      <h2>Poslední minuta</h2>
-      <div class="minute-grid">
-        <div><span>LAeq</span><strong id="mLaeq">—</strong></div>
-        <div><span>LAmax</span><strong id="mLamax">—</strong></div>
-        <div><span>LAmin</span><strong id="mLamin">—</strong></div>
-        <div><span>Limit</span><strong id="mLimit">—</strong></div>
+    <section class="fft-section" aria-label="Spektrum">
+      <div class="spectrum-head">
+        <div>
+          <h2>Spektrum</h2>
+          <p class="spectrum-hint" id="fftHint">1/3-oktáva + oktávy · živě (klikni na spectrogram pro jiný čas)</p>
+        </div>
+        <button type="button" class="ghost-btn" id="fftLiveBtn" hidden>Živě</button>
       </div>
+      <div class="spectrum-bars" id="spectrumBars"></div>
+    </section>
+
+    <section class="spectrogram-section" aria-label="Spectrogram">
+      <div class="spectrum-head">
+        <div>
+          <h2>Spectrogram</h2>
+          <p class="spectrum-hint">heatmapa · 1/3-oktáva v basu (trvalá čára = tón, např. 250 Hz) · klik = spektrum okamžiku</p>
+        </div>
+      </div>
+      <div class="spectrogram-wrap">
+        <div class="spectrogram-y" id="specYLabels" aria-hidden="true"></div>
+        <div class="spectrogram-canvas-wrap">
+          <canvas id="spectrogram" width="900" height="280" role="img" aria-label="Spectrogram"></canvas>
+          <div class="spectrogram-cursor" id="specCursor" hidden></div>
+        </div>
+        <div class="spectrogram-scale" id="specScale" aria-hidden="true"></div>
+      </div>
+      <div class="spectrogram-x" id="specXLabels"></div>
+      <p class="spectrogram-note" id="specNote">
+        Trvalá vodorovná čára (např. 250 Hz nebo 50/63 Hz) = stálý tón VZT/ventilátoru; zesílení večer je na heatmapě vidět lépe než z jedné hodnoty dB.
+      </p>
     </section>
   </main>
 
-  <script src="/static/app.js"></script>
+  <footer class="site-footer">
+    <div class="privacy">
+      <p class="privacy-eyebrow">Ochrana soukromí</p>
+      <ul class="privacy-points">
+        <li>
+          <span class="privacy-label">Bez nahrávek</span>
+          <span class="privacy-text">Zařízení neukládá ani nepřenáší zvukové nahrávky.</span>
+        </li>
+        <li>
+          <span class="privacy-label">Jen metriky</span>
+          <span class="privacy-text">Na zařízení probíhá pouze výpočet akustických metrik (LAeq, frekvenční spektrum, 1/3oktávová pásma a další statistiky).</span>
+        </li>
+        <li>
+          <span class="privacy-label">Agregovaná data</span>
+          <span class="privacy-text">Na server jsou odesílána pouze numerická data, ze kterých nelze zpětně rekonstruovat lidskou řeč.</span>
+        </li>
+      </ul>
+    </div>
+  </footer>
+
+  <script src="/static/app.js?v=10"></script>
 </body>
 </html>
