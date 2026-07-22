@@ -51,7 +51,7 @@ API:
 | `GET /api/v1/spectrum/at?ts=…` | spektrum (pseudo-FFT) v daném okamžiku |
 | `GET /api/v1/stats?hours=24` | agregace |
 
-Data: Docker volume `hlukomer_data` (SQLite). Retence minutových dat: `RETENTION_DAYS` (90). Živá 1s data: `LIVE_RETENTION_DAYS` (7).
+Data: SQLite v `./data/hlukomer.db` (bind mount do kontejneru). Retence minutových dat: `RETENTION_DAYS` (90). Živá 1s data: `LIVE_RETENTION_DAYS` (7).
 
 ## 2. ESPHome
 
