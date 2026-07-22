@@ -12,7 +12,22 @@ ICS-43434 ──I2S──► ESP32-S3 (ESPHome sound_level_meter)
               http://<server>:8080
 ```
 
-Měří **LAeq / LAmax / LAmin** (A-vážení, dB SPL) přes komponentu [esphome-sound-level-meter](https://github.com/stas-sl/esphome-sound-level-meter) s EQ pro ICS-43434.
+Měří **LAeq / LAmax / LAmin** (A-vážení), **LZeq** (bez A-vážení), **LFI 20–200 Hz** a spektrum: **1/3-oktáva 25–250 Hz** + oktávy 500 Hz–16 kHz přes [esphome-sound-level-meter](https://github.com/stas-sl/esphome-sound-level-meter).
+
+Z těchto dat dashboard počítá:
+
+| Metrika | Význam |
+|---|---|
+| **Celková hladina (dB)** | LZeq z ESP (fallback: součet pásem) |
+| **Low Frequency Index** | ESP filtr 20–200 Hz (fallback: součet 25–200 Hz pásem) |
+| **Dominantní frekvence** | střed nejsilnějšího pásma (rozlišení 1/3 oktávy v basu) |
+| **HVAC Score (0–100)** | basová dominance + tonalita typická pro VZT |
+| **Spectrogram** | heatmapa spektra v čase (tenká čára = stálý tón, např. 50/63 Hz) |
+| **Spektrum okamžiku** | klik na sloupec spectrogramu → pásma daného času |
+
+> ESP posílá **IIR pásmové filtry**, ne true FFT. 1/3-oktáva v basu stačí k odlišení 50 Hz (síť) vs 63 Hz (ventilátor).
+
+Po změně spektra je potřeba **znovu flashnout** ESP (`esphome run esphome/hlukomer.yaml`). Backend přijímá i legacy 10 oktáv do přeflashování.
 
 ## 1. Docker služba
 
@@ -30,8 +45,10 @@ API:
 | Endpoint | Popis |
 |---|---|
 | `POST /api/v1/ingest` | data z ESP (hlavička `X-Api-Key`) |
-| `GET /api/v1/latest` | poslední hodnoty + online stav |
+| `GET /api/v1/latest` | poslední hodnoty + spektrum + LFI / HVAC / dominantní frekvence |
 | `GET /api/v1/history?metric=laeq_1min&hours=24` | body grafu |
+| `GET /api/v1/spectrum/history?hours=6` | sloupce pro spectrogram |
+| `GET /api/v1/spectrum/at?ts=…` | spektrum (pseudo-FFT) v daném okamžiku |
 | `GET /api/v1/stats?hours=24` | agregace |
 
 Data: Docker volume `hlukomer_data` (SQLite). Retence minutových dat: `RETENTION_DAYS` (90). Živá 1s data: `LIVE_RETENTION_DAYS` (7).
@@ -62,8 +79,11 @@ Viz [CALIBRATION.md](./CALIBRATION.md). Po srovnání s referencí uprav `calibr
 curl -X POST http://localhost:8080/api/v1/ingest \
   -H "Content-Type: application/json" \
   -H "X-Api-Key: $(grep INGEST_API_KEY .env | cut -d= -f2)" \
-  -d '{"device_id":"hlukomer","kind":"live","laeq_1s":48.2}'
+  -d '{"device_id":"hlukomer","kind":"live","laeq_1s":48.2,"spectrum":[35,42,40,33,30,28,25,22,20,18]}'
 ```
+
+`spectrum` = 17 hodnot dB: 1/3-oktáva 25/31.5/40/50/63/80/100/125/160/200/250 + oktávy 500/1k/2k/4k/8k/16k Hz.  
+Volitelně `lez_1s` (LZeq) a `lfi_db` (20–200 Hz). Legacy firmware může poslat 10 oktáv.
 
 ## Poznámky k umístění
 

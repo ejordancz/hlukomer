@@ -36,6 +36,70 @@
       <p class="meta" id="liveMeta">čekám na data z ESP32…</p>
     </section>
 
+    <section class="derived" aria-label="Analýza spektra">
+      <div class="derived-card">
+        <span class="derived-label">Celková hladina</span>
+        <strong class="derived-value" id="mTotal">—.—</strong>
+        <span class="derived-unit">dB · bez A-vážení</span>
+      </div>
+      <div class="derived-card">
+        <span class="derived-label">Low Frequency Index</span>
+        <strong class="derived-value" id="mLfi">—.—</strong>
+        <span class="derived-unit">dB · 20–200 Hz</span>
+      </div>
+      <div class="derived-card">
+        <span class="derived-label">Dominantní frekvence</span>
+        <strong class="derived-value" id="mDom">—</strong>
+        <span class="derived-unit" id="mDomSub">oktávové pásmo</span>
+      </div>
+      <div class="derived-card">
+        <span class="derived-label">HVAC Score</span>
+        <strong class="derived-value" id="mHvac">—</strong>
+        <span class="derived-unit">0–100 · bas + tonalita</span>
+      </div>
+    </section>
+
+    <section class="spectrogram-section" aria-label="Spectrogram">
+      <div class="spectrum-head">
+        <div>
+          <h2>Spectrogram</h2>
+          <p class="spectrum-hint">heatmapa · 1/3-oktáva v basu (50/63 Hz jako tenká čára) · klik = spektrum okamžiku</p>
+        </div>
+        <label class="spec-range">
+          Rozsah
+          <select id="specRangeSelect">
+            <option value="1">1 hodina</option>
+            <option value="6" selected>6 hodin</option>
+            <option value="24">24 hodin</option>
+            <option value="168">7 dní</option>
+          </select>
+        </label>
+      </div>
+      <div class="spectrogram-wrap">
+        <div class="spectrogram-y" id="specYLabels" aria-hidden="true"></div>
+        <div class="spectrogram-canvas-wrap">
+          <canvas id="spectrogram" width="900" height="280" role="img" aria-label="Spectrogram"></canvas>
+          <div class="spectrogram-cursor" id="specCursor" hidden></div>
+        </div>
+        <div class="spectrogram-scale" id="specScale" aria-hidden="true"></div>
+      </div>
+      <div class="spectrogram-x" id="specXLabels"></div>
+      <p class="spectrogram-note" id="specNote">
+        Trvalá vodorovná čára (např. 50 nebo 63 Hz) = stálý tón ventilátoru/VZT; zesílení večer je na heatmapě vidět lépe než z jedné hodnoty dB.
+      </p>
+    </section>
+
+    <section class="fft-section" aria-label="Spektrum okamžiku">
+      <div class="spectrum-head">
+        <div>
+          <h2>Spektrum okamžiku</h2>
+          <p class="spectrum-hint" id="fftHint">1/3-oktáva + oktávy · živě (klikni na spectrogram pro jiný čas)</p>
+        </div>
+        <button type="button" class="ghost-btn" id="fftLiveBtn" hidden>Živě</button>
+      </div>
+      <div class="spectrum-bars" id="spectrumBars"></div>
+    </section>
+
     <section class="controls">
       <label>
         Rozsah

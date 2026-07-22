@@ -197,6 +197,284 @@ main {
   font-size: 0.9rem;
 }
 
+.derived {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 0.75rem 1.25rem;
+  margin: 0.25rem 0 1.75rem;
+  padding: 1rem 0;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  animation: rise 0.75s ease 0.04s both;
+}
+
+.derived-card {
+  min-width: 0;
+}
+
+.derived-label {
+  display: block;
+  color: var(--muted);
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin-bottom: 0.35rem;
+}
+
+.derived-value {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: clamp(1.35rem, 3.5vw, 1.85rem);
+  font-weight: 500;
+  letter-spacing: -0.02em;
+  line-height: 1.15;
+  transition: color 0.3s ease;
+}
+
+.derived-value.hvac-low {
+  color: var(--chart);
+}
+
+.derived-value.hvac-mid {
+  color: var(--warn);
+}
+
+.derived-value.hvac-high {
+  color: var(--danger);
+}
+
+.derived-unit {
+  display: block;
+  margin-top: 0.25rem;
+  color: var(--muted);
+  font-size: 0.72rem;
+  line-height: 1.3;
+}
+
+.spectrogram-section,
+.fft-section {
+  margin: 0 0 1.75rem;
+  animation: rise 0.85s ease 0.06s both;
+}
+
+.spec-range {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  color: var(--muted);
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.spec-range select {
+  appearance: none;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 0.45rem;
+  padding: 0.45rem 0.7rem;
+  font-family: var(--font-ui);
+  font-size: 0.9rem;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.spectrogram-wrap {
+  display: grid;
+  grid-template-columns: 3.6rem 1fr 2.2rem;
+  gap: 0.45rem;
+  align-items: stretch;
+}
+
+.spectrogram-y {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  padding: 0.15rem 0;
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  color: var(--muted);
+  text-align: right;
+  line-height: 1;
+}
+
+.spectrogram-canvas-wrap {
+  position: relative;
+  border-radius: 0.35rem;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  background: #0a1010;
+  min-height: 360px;
+}
+
+#spectrogram {
+  display: block;
+  width: 100%;
+  height: 360px;
+  cursor: crosshair;
+}
+
+.spectrogram-cursor {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 0;
+  border-left: 1px dashed rgba(232, 240, 236, 0.55);
+  pointer-events: none;
+  transform: translateX(-0.5px);
+}
+
+.spectrogram-scale {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.15rem 0;
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  color: var(--muted);
+  background: linear-gradient(
+    180deg,
+    rgb(253, 231, 37),
+    rgb(94, 201, 98),
+    rgb(33, 145, 140),
+    rgb(59, 82, 139),
+    rgb(68, 1, 84)
+  );
+  border-radius: 0.25rem;
+  text-shadow: 0 0 3px #000, 0 1px 2px #000;
+}
+
+.spectrogram-x {
+  position: relative;
+  height: 1.4rem;
+  margin: 0.35rem 0 0 3.6rem;
+  margin-right: 2.2rem;
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  color: var(--muted);
+}
+
+.spectrogram-x span {
+  position: absolute;
+  transform: translateX(-50%);
+  white-space: nowrap;
+}
+
+.spectrogram-note {
+  margin: 0.65rem 0 0;
+  color: var(--muted);
+  font-size: 0.8rem;
+  line-height: 1.45;
+  max-width: 52rem;
+}
+
+.ghost-btn {
+  appearance: none;
+  background: transparent;
+  color: var(--accent);
+  border: 1px solid rgba(196, 240, 130, 0.35);
+  border-radius: 0.4rem;
+  padding: 0.4rem 0.75rem;
+  font-family: var(--font-ui);
+  font-size: 0.8rem;
+  cursor: pointer;
+  transition: background 0.2s ease, border-color 0.2s ease;
+}
+
+.ghost-btn:hover {
+  background: rgba(196, 240, 130, 0.08);
+  border-color: rgba(196, 240, 130, 0.55);
+}
+
+.spectrum {
+  margin: 0.25rem 0 1.5rem;
+  animation: rise 0.8s ease 0.05s both;
+}
+
+.spectrum-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.35rem 1rem;
+  margin-bottom: 0.75rem;
+}
+
+.spectrum-head h2,
+.spectrogram-section h2,
+.fft-section h2 {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: 1.25rem;
+  font-weight: 500;
+}
+
+.spectrum-hint {
+  margin: 0.2rem 0 0;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.spectrum-bars {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.spectrum-bars.locked .s-fill {
+  background: linear-gradient(90deg, #3d6b9a, #7eb8e8);
+}
+
+.s-band {
+  display: grid;
+  grid-template-columns: 4.2rem 1fr 3.2rem;
+  align-items: center;
+  gap: 0.65rem;
+}
+
+.s-label {
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  color: var(--muted);
+  text-align: right;
+}
+
+.s-band.lf .s-label {
+  color: #b8d4c4;
+}
+
+.s-track {
+  height: 0.7rem;
+  border-radius: 0.2rem;
+  background: rgba(255, 255, 255, 0.05);
+  overflow: hidden;
+}
+
+.s-fill {
+  height: 100%;
+  width: 0;
+  border-radius: 0.2rem;
+  background: linear-gradient(90deg, #4d8f72, var(--accent));
+  transition: width 0.45s ease;
+}
+
+.s-band.hot .s-fill {
+  background: linear-gradient(90deg, #c4893a, var(--warn));
+}
+
+.s-band.empty .s-fill {
+  opacity: 0.25;
+}
+
+.s-val {
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
 .controls {
   display: flex;
   flex-wrap: wrap;
@@ -296,8 +574,18 @@ main {
 
 @media (max-width: 700px) {
   .stats,
-  .minute-grid {
+  .minute-grid,
+  .derived {
     grid-template-columns: repeat(2, 1fr);
+  }
+
+  .spectrogram-wrap {
+    grid-template-columns: 2.8rem 1fr 1.6rem;
+  }
+
+  .spectrogram-x {
+    margin-left: 2.8rem;
+    margin-right: 1.6rem;
   }
 
   .top {
