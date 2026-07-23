@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import json
 import math
 import os
 import secrets
@@ -21,6 +22,8 @@ from fastapi import Cookie, Depends, FastAPI, Header, HTTPException, Query, Requ
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
+
+from . import weather as weather_svc
 
 DATA_DIR = Path(os.getenv("DATA_DIR", "/data"))
 DB_PATH = DATA_DIR / "hlukomer.db"
@@ -228,8 +231,8 @@ def threshold_meta(ts: Optional[float] = None) -> dict[str, Any]:
     }
 
 
-def build_night_bands(t0: float, t1: float) -> list[dict[str, float]]:
-    """Intervaly noci [t0, t1] pro stínování pozadí grafu."""
+def build_alert_night_bands(t0: float, t1: float) -> list[dict[str, float]]:
+    """Intervaly nočního klidu (ALERT_*) — fallback stínování / legacy."""
     if t1 < t0:
         return []
     bands: list[dict[str, float]] = []
@@ -249,6 +252,82 @@ def build_night_bands(t0: float, t1: float) -> list[dict[str, float]]:
             bands.append({"t0": a, "t1": b})
         day += timedelta(days=1)
     return bands
+
+
+def build_sun_night_bands(t0: float, t1: float) -> Optional[list[dict[str, float]]]:
+    """Astronomická noc podle sunrise/sunset (MET Norway). None = použít fallback."""
+    if t1 < t0 or weather_svc.get_coords() is None:
+        return None
+    try:
+        weather_svc.prefetch_sun_range(t0, t1, TZ)
+    except Exception:  # noqa: BLE001
+        return None
+
+    bands: list[dict[str, float]] = []
+    local0 = datetime.fromtimestamp(t0, tz=TZ)
+    day = local0.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=1)
+    end_local = datetime.fromtimestamp(t1, tz=TZ)
+    ok_days = 0
+    while day <= end_local + timedelta(days=1):
+        date_str = day.date().isoformat()
+        next_str = (day + timedelta(days=1)).date().isoformat()
+        sun = weather_svc.get_sun_for_date(date_str, TZ)
+        sun_next = weather_svc.get_sun_for_date(next_str, TZ)
+        if sun is None:
+            day += timedelta(days=1)
+            continue
+        sunset_s = sun.get("sunset")
+        sunrise_next = (sun_next or {}).get("sunrise") if sun_next else None
+        # polar night: no sunrise/sunset — treat whole civil day as night if both null
+        if not sunset_s and not sun.get("sunrise"):
+            night_start = day.timestamp()
+            night_end = (day + timedelta(days=1)).timestamp()
+        elif not sunset_s or not sunrise_next:
+            day += timedelta(days=1)
+            continue
+        else:
+            night_start = datetime.fromisoformat(
+                sunset_s.replace("Z", "+00:00")
+            ).timestamp()
+            night_end = datetime.fromisoformat(
+                sunrise_next.replace("Z", "+00:00")
+            ).timestamp()
+        ok_days += 1
+        a = max(night_start, t0)
+        b = min(night_end, t1)
+        if a < b:
+            bands.append({"t0": a, "t1": b})
+        day += timedelta(days=1)
+
+    if ok_days == 0:
+        return None
+    return bands
+
+
+def build_night_bands(t0: float, t1: float) -> tuple[list[dict[str, float]], str]:
+    """Stínování den/noc v grafu — preferuje sunrise/sunset, jinak ALERT hodiny."""
+    sun = build_sun_night_bands(t0, t1)
+    if sun is not None:
+        return sun, "met.no"
+    return build_alert_night_bands(t0, t1), "fallback-alert-hours"
+
+
+def build_limit_change_edges(t0: float, t1: float) -> list[float]:
+    """Časy změn denního/nočního limitu (ALERT_*) pro spektrogram."""
+    if t1 < t0:
+        return []
+    edges: list[float] = []
+    local0 = datetime.fromtimestamp(t0, tz=TZ)
+    day = local0.replace(hour=0, minute=0, second=0, microsecond=0)
+    end_local = datetime.fromtimestamp(t1, tz=TZ)
+    while day <= end_local + timedelta(days=1):
+        for hour in (ALERT_DAY_START_HOUR, ALERT_DAY_END_HOUR):
+            boundary = day.replace(hour=hour, minute=0, second=0, microsecond=0)
+            ts = boundary.timestamp()
+            if t0 < ts < t1:
+                edges.append(ts)
+        day += timedelta(days=1)
+    return edges
 
 
 def build_threshold_line(t0: float, t1: float) -> list[dict[str, float]]:
@@ -394,6 +473,21 @@ def ensure_db() -> None:
                 key TEXT PRIMARY KEY,
                 value TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS weather_snapshots (
+                ts REAL PRIMARY KEY,
+                symbol_code TEXT,
+                description TEXT,
+                icon_class TEXT,
+                temperature_c REAL,
+                wind_speed_ms REAL,
+                wind_from_direction_deg REAL,
+                wind_from_direction_cardinal TEXT,
+                precipitation_1h_mm REAL,
+                relative_humidity_pct REAL,
+                pressure_hpa REAL,
+                skew_json TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_weather_ts ON weather_snapshots(ts);
             """
         )
 
@@ -505,6 +599,8 @@ def insert_metric(
 def on_startup() -> None:
     ensure_db()
     prune_old()
+    weather_svc.set_persist_callback(persist_weather_samples)
+    weather_svc.start_hourly_refresh()
 
 
 def prune_old() -> None:
@@ -518,6 +614,109 @@ def prune_old() -> None:
             f"DELETE FROM measurements WHERE metric IN ({placeholders}) AND ts < ?",
             (*LIVE_METRICS, cutoff_live),
         )
+        conn.execute("DELETE FROM weather_snapshots WHERE ts < ?", (cutoff_all,))
+
+
+def persist_weather_samples(samples: list[dict[str, Any]]) -> None:
+    """Uloží hodinové snapshoty z Locationforecast (UPSERT)."""
+    if not samples:
+        return
+    with db() as conn:
+        for s in samples:
+            skew = s.get("skew_factors") or []
+            conn.execute(
+                """
+                INSERT INTO weather_snapshots (
+                    ts, symbol_code, description, icon_class,
+                    temperature_c, wind_speed_ms, wind_from_direction_deg,
+                    wind_from_direction_cardinal, precipitation_1h_mm,
+                    relative_humidity_pct, pressure_hpa, skew_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(ts) DO UPDATE SET
+                    symbol_code=excluded.symbol_code,
+                    description=excluded.description,
+                    icon_class=excluded.icon_class,
+                    temperature_c=excluded.temperature_c,
+                    wind_speed_ms=excluded.wind_speed_ms,
+                    wind_from_direction_deg=excluded.wind_from_direction_deg,
+                    wind_from_direction_cardinal=excluded.wind_from_direction_cardinal,
+                    precipitation_1h_mm=excluded.precipitation_1h_mm,
+                    relative_humidity_pct=excluded.relative_humidity_pct,
+                    pressure_hpa=excluded.pressure_hpa,
+                    skew_json=excluded.skew_json
+                """,
+                (
+                    float(s["ts"]),
+                    s.get("symbol_code"),
+                    s.get("description"),
+                    s.get("icon_class"),
+                    s.get("temperature_c"),
+                    s.get("wind_speed_ms"),
+                    s.get("wind_from_direction_deg"),
+                    s.get("wind_from_direction_cardinal"),
+                    s.get("precipitation_1h_mm"),
+                    s.get("relative_humidity_pct"),
+                    s.get("pressure_hpa"),
+                    json.dumps(skew, ensure_ascii=False),
+                ),
+            )
+
+
+def weather_step_seconds(hours: float) -> float:
+    if hours <= 6:
+        return 3600.0
+    if hours <= 24:
+        return 3 * 3600.0
+    if hours <= 168:
+        return 6 * 3600.0
+    return 24 * 3600.0
+
+
+def fetch_weather_timeline(t0: float, t1: float, hours: float) -> list[dict[str, Any]]:
+    """Snapshoty v [t0, t1] podvzorkované podle rozsahu grafu."""
+    step = weather_step_seconds(hours)
+    with db() as conn:
+        rows = conn.execute(
+            """
+            SELECT * FROM weather_snapshots
+            WHERE ts >= ? AND ts <= ?
+            ORDER BY ts ASC
+            """,
+            (t0 - step, t1 + step),
+        ).fetchall()
+    if not rows:
+        return []
+
+    samples: list[dict[str, Any]] = []
+    next_bucket: Optional[float] = None
+    for row in rows:
+        ts = float(row["ts"])
+        if ts < t0 or ts > t1:
+            continue
+        bucket = math.floor(ts / step) * step
+        if next_bucket is not None and bucket < next_bucket:
+            continue
+        skew_raw = row["skew_json"] or "[]"
+        try:
+            skew = json.loads(skew_raw)
+        except json.JSONDecodeError:
+            skew = []
+        samples.append(
+            {
+                "t": ts,
+                "symbol_code": row["symbol_code"],
+                "description": row["description"],
+                "icon_class": row["icon_class"],
+                "temperature_c": row["temperature_c"],
+                "wind_speed_ms": row["wind_speed_ms"],
+                "wind_from_direction_deg": row["wind_from_direction_deg"],
+                "wind_from_direction_cardinal": row["wind_from_direction_cardinal"],
+                "precipitation_1h_mm": row["precipitation_1h_mm"],
+                "skew_factors": skew,
+            }
+        )
+        next_bucket = bucket + step
+    return samples
 
 
 def latest_metric_value(
@@ -813,6 +1012,7 @@ def spectrum_history(
     now = utc_now()
     with db() as conn:
         offline = fetch_offline_stats(conn, device_id, since, now)
+    night_bands, sun_source = build_night_bands(t0, t1)
     return {
         "device_id": device_id,
         "hours": hours,
@@ -822,7 +1022,9 @@ def spectrum_history(
         "columns": columns,
         "vmin": round(vmin, 1) if vmin is not None else None,
         "vmax": round(vmax, 1) if vmax is not None else None,
-        "night_bands": build_night_bands(t0, t1),
+        "night_bands": night_bands,
+        "limit_change_edges": build_limit_change_edges(t0, t1),
+        "sun": {"source": sun_source},
         "offline": offline,
         "note": note,
     }
@@ -882,6 +1084,8 @@ def history(
     t0 = points[0]["t"] if points else since
     t1 = points[-1]["t"] if points else utc_now()
     meta = threshold_meta()
+    night_bands, sun_source = build_night_bands(t0, t1)
+    now = utc_now()
     return {
         "metric": metric,
         "device_id": device_id,
@@ -890,10 +1094,18 @@ def history(
         "alert_period": meta["alert_period"],
         "thresholds": meta["thresholds"],
         "threshold_points": build_threshold_line(t0, t1),
-        "night_bands": build_night_bands(t0, t1),
+        "night_bands": night_bands,
+        "sun": {"source": sun_source},
+        "weather_timeline": fetch_weather_timeline(since, now, hours),
         "points": points,
         "stats": stats,
     }
+
+
+@app.get("/api/v1/weather")
+def weather() -> dict[str, Any]:
+    """Aktuální počasí + faktory zkreslení hlasitosti (MET Norway)."""
+    return weather_svc.weather_payload(TZ)
 
 
 @app.get("/api/v1/stats")

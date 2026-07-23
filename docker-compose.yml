@@ -16,6 +16,9 @@ services:
       LIVE_RETENTION_DAYS: ${LIVE_RETENTION_DAYS:-7}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:?ADMIN_PASSWORD musí být v .env}
       ADMIN_COOKIE_SECURE: ${ADMIN_COOKIE_SECURE:-0}
+      LATITUDE: ${LATITUDE:-}
+      LONGITUDE: ${LONGITUDE:-}
+      YR_USER_AGENT: ${YR_USER_AGENT:-hlukomer/1.0 (local)}
       DATA_DIR: /data
     volumes:
       - ./data:/data
