@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import math
 import os
+import secrets
+import shutil
 import sqlite3
+import tempfile
 import time
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
@@ -12,7 +17,7 @@ from pathlib import Path
 from typing import Any, Iterator, Optional
 from zoneinfo import ZoneInfo
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Query
+from fastapi import Cookie, Depends, FastAPI, Header, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -20,6 +25,18 @@ from pydantic import BaseModel, Field
 DATA_DIR = Path(os.getenv("DATA_DIR", "/data"))
 DB_PATH = DATA_DIR / "hlukomer.db"
 INGEST_API_KEY = os.getenv("INGEST_API_KEY", "changeme")
+ADMIN_PASSWORD = (os.getenv("ADMIN_PASSWORD") or "").strip()
+if not ADMIN_PASSWORD:
+    raise RuntimeError(
+        "ADMIN_PASSWORD není nastaveno. Doplň ho do .env (viz .env.example)."
+    )
+ADMIN_SESSION_SECRET = os.getenv(
+    "ADMIN_SESSION_SECRET",
+    hashlib.sha256(f"hlukomer-admin-session:{ADMIN_PASSWORD}".encode()).hexdigest(),
+)
+ADMIN_SESSION_TTL = int(os.getenv("ADMIN_SESSION_TTL", "3600"))
+ADMIN_COOKIE = "hlukomer_admin"
+ADMIN_COOKIE_SECURE = os.getenv("ADMIN_COOKIE_SECURE", "0") == "1"
 # Denní limit 6:00–22:00, jinak noční klid
 ALERT_DAY_DBA = float(os.getenv("ALERT_DAY_DBA", "45"))
 ALERT_NIGHT_DBA = float(os.getenv("ALERT_NIGHT_DBA", "40"))
@@ -263,6 +280,81 @@ def build_threshold_line(t0: float, t1: float) -> list[dict[str, float]]:
     return points
 
 
+# Mezera mezi vzorky LAeq 1s, od které považujeme zařízení za offline
+OFFLINE_GAP_S = float(os.getenv("OFFLINE_GAP_S", "30"))
+
+
+def compute_offline(
+    timestamps: list[float],
+    t0: float,
+    t1: float,
+    gap_threshold_s: float = OFFLINE_GAP_S,
+) -> dict[str, Any]:
+    """Spočítá období bez dat (offline) v intervalu [t0, t1].
+
+    Vstupem jsou časové značky pravidelné metriky (typicky laeq_1s).
+    Mezera > gap_threshold_s = výpadek; stejně chybějící data na začátku/konci rozsahu.
+    """
+    range_s = max(0.0, t1 - t0)
+    gaps: list[dict[str, float]] = []
+
+    def add_gap(a: float, b: float) -> None:
+        a = max(a, t0)
+        b = min(b, t1)
+        if b - a > gap_threshold_s:
+            gaps.append({"t0": a, "t1": b, "duration_s": b - a})
+
+    if not timestamps:
+        add_gap(t0, t1)
+    else:
+        add_gap(t0, timestamps[0])
+        for prev, cur in zip(timestamps, timestamps[1:]):
+            add_gap(prev, cur)
+        add_gap(timestamps[-1], t1)
+
+    total_s = sum(g["duration_s"] for g in gaps)
+    online_s = max(0.0, range_s - total_s)
+    offline_pct = (100.0 * total_s / range_s) if range_s > 0 else 0.0
+    gaps.sort(key=lambda g: g["t0"])
+    return {
+        "gap_threshold_s": gap_threshold_s,
+        "t0": round(t0, 3),
+        "t1": round(t1, 3),
+        "range_s": round(range_s, 1),
+        "offline_s": round(total_s, 1),
+        "online_s": round(online_s, 1),
+        "offline_pct": round(offline_pct, 1),
+        "gap_count": len(gaps),
+        "gaps": [
+            {
+                "t0": round(g["t0"], 3),
+                "t1": round(g["t1"], 3),
+                "duration_s": round(g["duration_s"], 1),
+            }
+            for g in gaps
+        ],
+    }
+
+
+def fetch_offline_stats(
+    conn: sqlite3.Connection,
+    device_id: str,
+    since: float,
+    until: Optional[float] = None,
+) -> dict[str, Any]:
+    """Offline statistika z časových značek laeq_1s (bez downsample)."""
+    t1 = until if until is not None else utc_now()
+    rows = conn.execute(
+        """
+        SELECT ts FROM measurements
+        WHERE device_id = ? AND metric = 'laeq_1s' AND ts >= ? AND ts <= ?
+        ORDER BY ts ASC
+        """,
+        (device_id, since, t1),
+    ).fetchall()
+    return compute_offline([float(r["ts"]) for r in rows], since, t1)
+
+
 class IngestPayload(BaseModel):
     device_id: str = Field(default="hlukomer", max_length=64)
     kind: str = Field(default="live", pattern="^(live|minute)$")
@@ -322,6 +414,73 @@ def require_api_key(x_api_key: Optional[str] = Header(default=None)) -> None:
         return
     if x_api_key != INGEST_API_KEY:
         raise HTTPException(status_code=401, detail="Invalid API key")
+
+
+def _create_admin_token() -> str:
+    exp = int(time.time()) + ADMIN_SESSION_TTL
+    nonce = secrets.token_hex(16)
+    payload = f"{exp}.{nonce}"
+    sig = hmac.new(
+        ADMIN_SESSION_SECRET.encode(),
+        payload.encode(),
+        hashlib.sha256,
+    ).hexdigest()
+    return f"{payload}.{sig}"
+
+
+def _verify_admin_token(token: Optional[str]) -> bool:
+    if not token:
+        return False
+    parts = token.split(".")
+    if len(parts) != 3:
+        return False
+    exp_s, nonce, sig = parts
+    if not exp_s.isdigit() or not nonce or not sig:
+        return False
+    payload = f"{exp_s}.{nonce}"
+    expected = hmac.new(
+        ADMIN_SESSION_SECRET.encode(),
+        payload.encode(),
+        hashlib.sha256,
+    ).hexdigest()
+    if not hmac.compare_digest(sig, expected):
+        return False
+    if int(exp_s) < int(time.time()):
+        return False
+    return True
+
+
+def _set_admin_cookie(response: Response, token: str) -> None:
+    response.set_cookie(
+        key=ADMIN_COOKIE,
+        value=token,
+        max_age=ADMIN_SESSION_TTL,
+        httponly=True,
+        samesite="strict",
+        secure=ADMIN_COOKIE_SECURE,
+        path="/api/admin",
+    )
+
+
+def _clear_admin_cookie(response: Response) -> None:
+    response.delete_cookie(
+        key=ADMIN_COOKIE,
+        path="/api/admin",
+        httponly=True,
+        samesite="strict",
+        secure=ADMIN_COOKIE_SECURE,
+    )
+
+
+def require_admin_session(
+    hlukomer_admin: Optional[str] = Cookie(default=None, alias=ADMIN_COOKIE),
+) -> None:
+    if not _verify_admin_token(hlukomer_admin):
+        raise HTTPException(status_code=401, detail="Neautorizováno")
+
+
+class AdminLogin(BaseModel):
+    password: str = Field(min_length=1, max_length=256)
 
 
 def insert_metric(
@@ -651,6 +810,9 @@ def spectrum_history(
             note = "Legacy 10 oktáv (starý firmware). Po flashi ESP uvidíš 1/3-oktávu v basu."
     t0 = columns[0]["t"] if columns else since
     t1 = columns[-1]["t"] if columns else utc_now()
+    now = utc_now()
+    with db() as conn:
+        offline = fetch_offline_stats(conn, device_id, since, now)
     return {
         "device_id": device_id,
         "hours": hours,
@@ -661,6 +823,7 @@ def spectrum_history(
         "vmin": round(vmin, 1) if vmin is not None else None,
         "vmax": round(vmax, 1) if vmax is not None else None,
         "night_bands": build_night_bands(t0, t1),
+        "offline": offline,
         "note": note,
     }
 
@@ -769,6 +932,69 @@ def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
+@app.post("/api/admin/login")
+def admin_login(body: AdminLogin, response: Response) -> dict[str, str]:
+    provided = hashlib.sha256(body.password.encode("utf-8")).digest()
+    expected = hashlib.sha256(ADMIN_PASSWORD.encode("utf-8")).digest()
+    if not hmac.compare_digest(provided, expected):
+        raise HTTPException(status_code=401, detail="Neplatné heslo")
+    _set_admin_cookie(response, _create_admin_token())
+    return {"status": "ok"}
+
+
+@app.post("/api/admin/logout")
+def admin_logout(response: Response) -> dict[str, str]:
+    _clear_admin_cookie(response)
+    return {"status": "ok"}
+
+
+@app.get("/api/admin/session")
+def admin_session(_: None = Depends(require_admin_session)) -> dict[str, str]:
+    return {"status": "ok"}
+
+
+@app.get("/api/admin/backup")
+def admin_backup(_: None = Depends(require_admin_session)) -> FileResponse:
+    if not DB_PATH.exists():
+        raise HTTPException(status_code=404, detail="Databáze neexistuje")
+    return FileResponse(
+        path=DB_PATH,
+        filename="hlukomer.db",
+        media_type="application/octet-stream",
+    )
+
+
+@app.post("/api/admin/restore")
+async def admin_restore(
+    request: Request,
+    _: None = Depends(require_admin_session),
+) -> dict[str, str]:
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    body = await request.body()
+    if not body:
+        raise HTTPException(status_code=400, detail="Prázdný soubor")
+
+    with tempfile.NamedTemporaryFile(delete=False, dir=DATA_DIR, suffix=".db") as tmp:
+        tmp_path = Path(tmp.name)
+        tmp.write(body)
+
+    try:
+        probe = sqlite3.connect(f"file:{tmp_path}?mode=ro", uri=True)
+        try:
+            probe.execute("SELECT 1 FROM sqlite_master LIMIT 1").fetchone()
+        finally:
+            probe.close()
+    except sqlite3.Error as exc:
+        tmp_path.unlink(missing_ok=True)
+        raise HTTPException(status_code=400, detail="Neplatný SQLite soubor") from exc
+
+    # Nahradit DB včetně případných WAL/SHM souborů
+    for side in (Path(str(DB_PATH) + "-wal"), Path(str(DB_PATH) + "-shm")):
+        side.unlink(missing_ok=True)
+    shutil.move(str(tmp_path), str(DB_PATH))
+    return {"status": "ok"}
+
+
 def downsample(points: list[dict[str, float]], max_points: int) -> list[dict[str, float]]:
     """Jednoduchý LTTB-like bucket average pro graf."""
     if len(points) <= max_points:
@@ -792,6 +1018,11 @@ def downsample(points: list[dict[str, float]], max_points: int) -> list[dict[str
 @app.get("/")
 def index() -> FileResponse:
     return FileResponse(STATIC_DIR / "index.html")
+
+
+@app.get("/admin")
+def admin_page() -> FileResponse:
+    return FileResponse(STATIC_DIR / "admin.html")
 
 
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")

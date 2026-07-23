@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="robots" content="noindex,nofollow" />
+  <title>Administrace · Hlukoměr</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,700&family=IBM+Plex+Mono:wght@400;500&family=Sora:wght@400;500;600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/static/style.css?v=23" />
+</head>
+<body class="admin-page">
+  <div class="bg" aria-hidden="true"></div>
+
+  <main class="admin-shell">
+    <header class="admin-head">
+      <p class="brand-name">Hlukoměr</p>
+      <h1>Administrace</h1>
+      <p class="admin-back-wrap">
+        <a class="admin-back" href="/">← Zpět na dashboard</a>
+      </p>
+    </header>
+
+    <section class="admin-panel" id="loginPanel">
+      <form id="loginForm" autocomplete="on">
+        <label class="admin-label" for="adminPassword">Heslo</label>
+        <input
+          type="password"
+          id="adminPassword"
+          class="admin-input"
+          name="password"
+          autocomplete="current-password"
+          required
+        />
+        <p class="admin-error" id="loginError" hidden>Neplatné heslo</p>
+        <div class="admin-actions">
+          <button type="submit" class="ghost-btn">Přihlásit</button>
+        </div>
+      </form>
+    </section>
+
+    <section class="admin-panel" id="toolsPanel" hidden>
+      <p class="admin-hint">Záloha a obnovení databáze <code>hlukomer.db</code>.</p>
+      <div class="admin-actions admin-tools">
+        <button type="button" class="ghost-btn" id="backupBtn">Backup</button>
+        <label class="ghost-btn admin-file-btn">
+          Restore
+          <input type="file" id="restoreInput" accept=".db,application/octet-stream" hidden />
+        </label>
+        <button type="button" class="ghost-btn admin-cancel" id="logoutBtn">Odhlásit</button>
+      </div>
+      <p class="admin-status" id="statusMsg" hidden></p>
+    </section>
+  </main>
+
+  <script src="/static/admin.js?v=1"></script>
+</body>
+</html>

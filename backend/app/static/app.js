@@ -35,19 +35,17 @@ const LF_BANDS = new Set([
 
 const SPEC_HEIGHT = 360;
 
-const API_LOG_MAX = 80;
-
 const state = {
   threshold: 45,
   period: "day",
   chart: null,
+  offlineChart: null,
   nightBands: [],
+  offlineGaps: [],
   liveSpectrum: null,
   selectedTs: null,
   spectrogram: null,
   hoverCol: null,
-  apiLogEntries: [],
-  apiLogWin: null,
 };
 
 function fmtDb(v) {
@@ -60,15 +58,66 @@ function fmtPct(v) {
   return `${Number(v).toFixed(0)} %`;
 }
 
+/** Lidská délka intervalu (s → „2 h 15 min“). */
+function fmtDuration(seconds) {
+  if (seconds == null || Number.isNaN(seconds)) return "—";
+  let s = Math.max(0, Math.round(Number(seconds)));
+  if (s < 60) return `${s} s`;
+  const d = Math.floor(s / 86400);
+  s %= 86400;
+  const h = Math.floor(s / 3600);
+  s %= 3600;
+  const m = Math.floor(s / 60);
+  s %= 60;
+  const parts = [];
+  if (d) parts.push(`${d} d`);
+  if (h) parts.push(`${h} h`);
+  if (m && d < 2) parts.push(`${m} min`);
+  if (!d && !h && s) parts.push(`${s} s`);
+  if (!parts.length) parts.push("0 s");
+  return parts.join(" ");
+}
+
+/** Jednotný český 24h formát času (bez AM/PM). */
+const TIME_OPTS = {
+  hour: "2-digit",
+  minute: "2-digit",
+  hour12: false,
+};
+
 function fmtTime(ts) {
   const d = new Date(ts * 1000);
   return d.toLocaleString("cs-CZ", {
     day: "2-digit",
     month: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
+    ...TIME_OPTS,
     second: "2-digit",
   });
+}
+
+/** Osa grafu / spektrogramu: HH:mm, u delších rozsahů i den. */
+function fmtAxisTime(ts, { withDate = false } = {}) {
+  const d = new Date(ts * 1000);
+  return d.toLocaleString("cs-CZ", {
+    ...TIME_OPTS,
+    ...(withDate ? { day: "2-digit", month: "2-digit" } : {}),
+  });
+}
+
+/** Chart.js displayFormats — vždy 24h, české tečky u data. */
+function chartTimeFormats(hours) {
+  const withDate = Number(hours) >= 48;
+  return {
+    millisecond: "HH:mm:ss",
+    second: "HH:mm:ss",
+    minute: withDate ? "dd. MM. HH:mm" : "HH:mm",
+    hour: withDate ? "dd. MM. HH:mm" : "HH:mm",
+    day: "dd. MM.",
+    week: "dd. MM.",
+    month: "MM. yyyy",
+    quarter: "QQQ yyyy",
+    year: "yyyy",
+  };
 }
 
 function setLevelClass(el, value) {
@@ -76,14 +125,6 @@ function setLevelClass(el, value) {
   if (value == null) return;
   if (value >= state.threshold + 5) el.classList.add("over");
   else if (value >= state.threshold) el.classList.add("hot");
-}
-
-function setHvacClass(el, score) {
-  el.classList.remove("hvac-low", "hvac-mid", "hvac-high");
-  if (score == null) return;
-  if (score >= 65) el.classList.add("hvac-high");
-  else if (score >= 40) el.classList.add("hvac-mid");
-  else el.classList.add("hvac-low");
 }
 
 function updateOverLimit(laeq) {
@@ -108,218 +149,12 @@ function updateOverLimit(laeq) {
   sub.textContent = `dB ${over ? "nad" : "pod"} ${state.threshold.toFixed(0)} dBA (${periodLabel})`;
 }
 
-function appendApiLog(url, payload, error) {
-  const ts = new Date().toLocaleTimeString("cs-CZ", {
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-  });
-  const body = error
-    ? String(error)
-    : JSON.stringify(payload, null, 2);
-  state.apiLogEntries.push({ ts, url, body, error: Boolean(error) });
-  if (state.apiLogEntries.length > API_LOG_MAX) {
-    state.apiLogEntries.splice(0, state.apiLogEntries.length - API_LOG_MAX);
-  }
-  renderApiLogPopup();
-}
-
-function escapeHtml(s) {
-  return String(s)
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
-}
-
-function apiLogEntriesHtml() {
-  const entries = state.apiLogEntries;
-  if (!entries.length) return "Zatím žádná data.";
-  return entries
-    .map((e) => {
-      const meta = e.error
-        ? `${e.ts} · ${e.url} · CHYBA`
-        : `${e.ts} · ${e.url}`;
-      return (
-        `<div class="entry">` +
-        `<div class="meta">${escapeHtml(meta)}</div>` +
-        `<pre>${escapeHtml(e.body)}</pre>` +
-        `</div>`
-      );
-    })
-    .join("");
-}
-
-function apiLogPopupShellHtml() {
-  return `<!DOCTYPE html>
-<html lang="cs">
-<head>
-  <meta charset="utf-8" />
-  <title>Hlukoměr · API log</title>
-  <style>
-    :root {
-      --bg: #0c1412;
-      --ink: #e8f0ec;
-      --muted: #8fa399;
-      --line: rgba(232, 240, 236, 0.12);
-      --accent: #c4f082;
-    }
-    * { box-sizing: border-box; }
-    html, body {
-      margin: 0;
-      min-height: 100%;
-      background: var(--bg);
-      color: var(--ink);
-      font-family: "IBM Plex Mono", ui-monospace, monospace;
-    }
-    header {
-      position: sticky;
-      top: 0;
-      z-index: 1;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 0.75rem;
-      padding: 0.75rem 1rem;
-      border-bottom: 1px solid var(--line);
-      background: rgba(12, 20, 18, 0.95);
-      backdrop-filter: blur(6px);
-    }
-    h1 {
-      margin: 0;
-      font-size: 0.95rem;
-      font-weight: 500;
-      letter-spacing: 0.02em;
-    }
-    button {
-      appearance: none;
-      background: transparent;
-      color: var(--accent);
-      border: 1px solid rgba(196, 240, 130, 0.35);
-      border-radius: 0.35rem;
-      padding: 0.35rem 0.65rem;
-      font: inherit;
-      font-size: 0.78rem;
-      cursor: pointer;
-    }
-    button:hover {
-      background: rgba(196, 240, 130, 0.08);
-      border-color: rgba(196, 240, 130, 0.55);
-    }
-    #log {
-      padding: 0.85rem 1rem 1.5rem;
-      font-size: 0.72rem;
-      line-height: 1.45;
-      color: var(--muted);
-      white-space: pre-wrap;
-      word-break: break-word;
-    }
-    .entry + .entry {
-      margin-top: 0.85rem;
-      padding-top: 0.85rem;
-      border-top: 1px solid var(--line);
-    }
-    .meta {
-      color: var(--accent);
-      margin-bottom: 0.35rem;
-    }
-    pre {
-      margin: 0;
-      font: inherit;
-      white-space: pre-wrap;
-      word-break: break-word;
-    }
-  </style>
-</head>
-<body>
-  <header>
-    <h1>API log · surová data</h1>
-    <button type="button" id="clearBtn">Vymazat</button>
-  </header>
-  <div id="log">${apiLogEntriesHtml()}</div>
-</body>
-</html>`;
-}
-
-function isApiLogPopupOpen() {
-  return state.apiLogWin && !state.apiLogWin.closed;
-}
-
-function bindApiLogPopup() {
-  const win = state.apiLogWin;
-  if (!isApiLogPopupOpen()) return;
-  const btn = win.document.getElementById("clearBtn");
-  if (btn && !btn.dataset.bound) {
-    btn.dataset.bound = "1";
-    btn.addEventListener("click", () => clearApiLog());
-  }
-}
-
-function renderApiLogPopup() {
-  if (!isApiLogPopupOpen()) return;
-  const win = state.apiLogWin;
-  const logEl = win.document.getElementById("log");
-  if (!logEl) {
-    win.document.open();
-    win.document.write(apiLogPopupShellHtml());
-    win.document.close();
-    bindApiLogPopup();
-    return;
-  }
-  const nearBottom =
-    win.innerHeight + win.scrollY >= win.document.body.scrollHeight - 80;
-  logEl.innerHTML = apiLogEntriesHtml();
-  if (nearBottom) {
-    win.scrollTo(0, win.document.body.scrollHeight);
-  }
-}
-
-function openApiLogPopup() {
-  if (isApiLogPopupOpen()) {
-    state.apiLogWin.focus();
-    renderApiLogPopup();
-    return;
-  }
-  const win = window.open(
-    "",
-    "hlukomer-api-log",
-    "width=780,height=640,menubar=no,toolbar=no,location=no,status=no,resizable=yes,scrollbars=yes"
-  );
-  if (!win) {
-    window.alert(
-      "Prohlížeč zablokoval popup. Povolte vyskakovací okna pro tuto stránku."
-    );
-    return;
-  }
-  state.apiLogWin = win;
-  win.document.open();
-  win.document.write(apiLogPopupShellHtml());
-  win.document.close();
-  bindApiLogPopup();
-  win.focus();
-}
-
-function clearApiLog() {
-  state.apiLogEntries = [];
-  renderApiLogPopup();
-}
-
 async function fetchJson(url) {
-  try {
-    const res = await fetch(url);
-    if (!res.ok) {
-      const err = new Error(`${res.status} ${url}`);
-      appendApiLog(url, null, err.message);
-      throw err;
-    }
-    const data = await res.json();
-    appendApiLog(url, data);
-    return data;
-  } catch (err) {
-    if (!String(err.message || "").includes(url)) {
-      appendApiLog(url, null, err.message || err);
-    }
-    throw err;
+  const res = await fetch(url);
+  if (!res.ok) {
+    throw new Error(`${res.status} ${url}`);
   }
+  return res.json();
 }
 
 /** Viridis-ish: quiet → loud */
@@ -395,6 +230,52 @@ const dayNightBandsPlugin = {
   },
 };
 
+/** Pásy offline / online na časové ose pod spektrogramem. */
+const offlineBandsPlugin = {
+  id: "offlineBands",
+  beforeDatasetsDraw(chart) {
+    const gaps = state.offlineGaps;
+    const { ctx, chartArea, scales } = chart;
+    const x = scales.x;
+    if (!chartArea || !x) return;
+
+    const width = chartArea.right - chartArea.left;
+    const height = chartArea.bottom - chartArea.top;
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(chartArea.left, chartArea.top, width, height);
+    ctx.clip();
+
+    ctx.fillStyle = "rgba(126, 200, 163, 0.28)";
+    ctx.fillRect(chartArea.left, chartArea.top, width, height);
+
+    ctx.fillStyle = "rgba(232, 93, 76, 0.78)";
+    for (const gap of gaps) {
+      const x0 = x.getPixelForValue(gap.t0 * 1000);
+      const x1 = x.getPixelForValue(gap.t1 * 1000);
+      const left = Math.max(chartArea.left, Math.min(x0, x1));
+      const right = Math.min(chartArea.right, Math.max(x0, x1));
+      if (right - left < 0.5) continue;
+      ctx.fillRect(left, chartArea.top, right - left, height);
+    }
+    ctx.restore();
+  },
+};
+
+/** Společný časový rozsah hlavní graf + offline timeline. */
+function syncChartTimeRange(t0, t1, hours) {
+  const min = t0 * 1000;
+  const max = t1 * 1000;
+  const formats = chartTimeFormats(hours);
+  for (const chart of [state.chart, state.offlineChart]) {
+    if (!chart) continue;
+    chart.options.scales.x.min = min;
+    chart.options.scales.x.max = max;
+    chart.options.scales.x.time.displayFormats = formats;
+  }
+}
+
 function initChart() {
   const ctx = $("chart").getContext("2d");
   state.chart = new Chart(ctx, {
@@ -434,27 +315,109 @@ function initChart() {
       scales: {
         x: {
           type: "time",
-          time: { tooltipFormat: "dd.MM. HH:mm:ss" },
-          grid: { color: "rgba(232,240,236,0.06)" },
-          ticks: { color: "#8fa399", maxRotation: 0 },
-        },
-        y: {
+          time: {
+            tooltipFormat: "dd. MM. yyyy HH:mm:ss",
+            displayFormats: chartTimeFormats(24),
+          },
           grid: { color: "rgba(232,240,236,0.06)" },
           ticks: {
-            color: "#8fa399",
+            color: "#a8bab2",
+            maxRotation: 0,
+            autoSkipPadding: 16,
+            callback(value) {
+              if (typeof value !== "number") return "";
+              const hours = Number($("rangeSelect")?.value || 24);
+              return fmtAxisTime(value / 1000, { withDate: hours >= 48 });
+            },
+          },
+        },
+        y: {
+          min: 0,
+          grid: { color: "rgba(232,240,236,0.06)" },
+          ticks: {
+            color: "#a8bab2",
             callback: (v) => `${v}`,
           },
-          title: { display: true, text: "dBA", color: "#8fa399" },
+          title: { display: true, text: "dBA", color: "#a8bab2" },
         },
       },
       plugins: {
         legend: { display: false },
         tooltip: {
           callbacks: {
+            title: (items) => {
+              const ts = items[0]?.parsed?.x;
+              if (ts == null) return "";
+              return fmtTime(ts / 1000);
+            },
             label: (ctx) =>
               ctx.dataset.label === "limit"
                 ? `limit ${ctx.parsed.y.toFixed(1)} dBA`
                 : `${ctx.parsed.y.toFixed(1)} dBA`,
+          },
+        },
+      },
+    },
+  });
+}
+
+function initOfflineChart() {
+  const canvas = $("offlineChart");
+  if (!canvas) return;
+  const ctx = canvas.getContext("2d");
+  state.offlineChart = new Chart(ctx, {
+    type: "line",
+    plugins: [offlineBandsPlugin],
+    data: {
+      datasets: [
+        {
+          label: "offline",
+          data: [],
+          borderWidth: 0,
+          pointRadius: 0,
+          fill: false,
+        },
+      ],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: false,
+      interaction: { mode: "nearest", intersect: false, axis: "x" },
+      layout: { padding: 0 },
+      scales: {
+        x: {
+          type: "time",
+          time: {
+            tooltipFormat: "dd. MM. yyyy HH:mm:ss",
+            displayFormats: chartTimeFormats(24),
+          },
+          display: false,
+          grid: { display: false },
+        },
+        y: {
+          min: 0,
+          max: 1,
+          display: false,
+          grid: { display: false },
+        },
+      },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            title: (items) => {
+              const ts = items[0]?.parsed?.x;
+              if (ts == null) return "";
+              return fmtTime(ts / 1000);
+            },
+            label: (ctx) => {
+              const ts = ctx.parsed.x / 1000;
+              const gap = state.offlineGaps.find((g) => ts >= g.t0 && ts <= g.t1);
+              return gap
+                ? `bez dat · ${fmtDuration(gap.duration_s)}`
+                : "data přítomna";
+            },
           },
         },
       },
@@ -468,8 +431,6 @@ function renderAnalysis(analysis) {
     $("mLfi").textContent = "—.—";
     $("mDom").textContent = "—";
     $("mDomSub").textContent = "oktávové pásmo";
-    $("mHvac").textContent = "—";
-    setHvacClass($("mHvac"), null);
     return;
   }
   $("mTotal").textContent = fmtDb(analysis.leq_total_db);
@@ -489,9 +450,6 @@ function renderAnalysis(analysis) {
     analysis.dominant_db != null
       ? `${fmtDb(analysis.dominant_db)} dB · střed ${analysis.dominant_hz} Hz`
       : "oktávové pásmo";
-  $("mHvac").textContent =
-    analysis.hvac_score != null ? Number(analysis.hvac_score).toFixed(0) : "—";
-  setHvacClass($("mHvac"), analysis.hvac_score);
 }
 
 function renderSpectrumBars(bands, { locked } = {}) {
@@ -552,8 +510,6 @@ async function refreshLatest() {
     const data = await fetchJson("/api/v1/latest");
     state.threshold = data.alert_threshold_dba ?? 45;
     state.period = data.alert_period ?? "day";
-    const periodLabel = state.period === "night" ? "noc" : "den";
-    $("statLimit").textContent = `${state.threshold.toFixed(0)} dBA (${periodLabel})`;
 
     const online = Boolean(data.online);
     $("onlineDot").className = `dot ${online ? "on" : "off"}`;
@@ -624,7 +580,7 @@ function drawSpectrogram() {
     ctx.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0);
     ctx.fillStyle = "rgba(255,255,255,0.04)";
     ctx.fillRect(0, 0, w, SPEC_HEIGHT);
-    ctx.fillStyle = "#8fa399";
+    ctx.fillStyle = "#a8bab2";
     ctx.font = "14px Sora, sans-serif";
     ctx.fillText("Čekám na historii spektra…", 16, Math.round(SPEC_HEIGHT / 2));
     $("specYLabels").innerHTML = "";
@@ -694,15 +650,10 @@ function drawSpectrogram() {
 
   const xLabels = [];
   const nTicks = Math.min(6, cols.length);
+  const withDate = Number(data.hours) >= 24;
   for (let i = 0; i < nTicks; i++) {
     const idx = Math.round((i / Math.max(1, nTicks - 1)) * (cols.length - 1));
-    const t = cols[idx].t;
-    const d = new Date(t * 1000);
-    const label = d.toLocaleString("cs-CZ", {
-      hour: "2-digit",
-      minute: "2-digit",
-      ...(data.hours >= 24 ? { day: "2-digit", month: "2-digit" } : {}),
-    });
+    const label = fmtAxisTime(cols[idx].t, { withDate });
     xLabels.push(
       `<span style="left:${(idx / Math.max(1, cols.length - 1)) * 100}%">${label}</span>`
     );
@@ -764,7 +715,6 @@ async function selectSpectrogramCol(idx) {
         dominant_hz: data.spectrum.dominant_hz,
         dominant_label: data.spectrum.dominant_label,
         dominant_db: data.spectrum.dominant_db,
-        hvac_score: data.spectrum.hvac_score,
       });
     }
   } catch (_) {
@@ -793,9 +743,84 @@ async function refreshSpectrogram() {
       $("specNote").textContent = data.note;
     }
     drawSpectrogram();
+    renderOfflineStats(data.offline);
   } catch (err) {
     console.error(err);
   }
+}
+
+function renderOfflineStats(offline) {
+  const totalEl = $("offlineTotal");
+  const pctEl = $("offlinePct");
+  const countEl = $("offlineCount");
+  const onlineEl = $("offlineOnline");
+  const gapsEl = $("offlineGaps");
+  const hintEl = $("offlineHint");
+  const expandBtn = $("offlineExpandBtn");
+  if (!totalEl) return;
+
+  const expanded = expandBtn?.getAttribute("aria-expanded") === "true";
+
+  if (!offline) {
+    state.offlineGaps = [];
+    totalEl.textContent = "—";
+    pctEl.textContent = "—";
+    countEl.textContent = "—";
+    onlineEl.textContent = "—";
+    gapsEl.hidden = true;
+    gapsEl.innerHTML = "";
+    if (state.offlineChart) {
+      state.offlineChart.data.datasets[0].data = [];
+      state.offlineChart.update("none");
+    }
+    return;
+  }
+
+  const thr = offline.gap_threshold_s ?? 30;
+  const hours = Number($("rangeSelect")?.value || 24);
+  if (hintEl) {
+    hintEl.textContent = `Výpadky ve vybraném rozsahu · mezera > ${thr} s · osa X jako hlavní graf`;
+  }
+
+  totalEl.textContent = fmtDuration(offline.offline_s);
+  pctEl.textContent = fmtPct(offline.offline_pct);
+  countEl.textContent =
+    offline.gap_count != null ? String(offline.gap_count) : "—";
+  onlineEl.textContent = fmtDuration(offline.online_s);
+
+  const gaps = offline.gaps || [];
+  state.offlineGaps = gaps;
+
+  const t0 = offline.t0 ?? Date.now() / 1000 - hours * 3600;
+  const t1 = offline.t1 ?? Date.now() / 1000;
+  syncChartTimeRange(t0, t1, hours);
+
+  if (state.offlineChart) {
+    // Vzorky po ose X kvůli tooltipu; pásy kreslí plugin
+    const n = 160;
+    const span = Math.max(1e-6, t1 - t0);
+    const samples = [];
+    for (let i = 0; i <= n; i++) {
+      samples.push({ x: (t0 + (span * i) / n) * 1000, y: 0 });
+    }
+    state.offlineChart.data.datasets[0].data = samples;
+    state.offlineChart.update("none");
+  }
+  if (state.chart) state.chart.update("none");
+
+  if (!gaps.length) {
+    gapsEl.innerHTML =
+      `<li class="offline-gaps-empty">V tomto rozsahu nebyly žádné výpadky delší než ${thr} s.</li>`;
+  } else {
+    gapsEl.innerHTML = gaps
+      .map((g) => {
+        const a = fmtAxisTime(g.t0, { withDate: true });
+        const b = fmtAxisTime(g.t1, { withDate: true });
+        return `<li><span class="gap-when">${a} – ${b}</span><span class="gap-dur">${fmtDuration(g.duration_s)}</span></li>`;
+      })
+      .join("");
+  }
+  gapsEl.hidden = !expanded;
 }
 
 async function refreshHistory() {
@@ -820,6 +845,16 @@ async function refreshHistory() {
       x: p.t * 1000,
       y: p.v,
     }));
+
+    const t1 = Date.now() / 1000;
+    const t0 = t1 - Number(hours) * 3600;
+    // Pokud už máme offline rozsah z API, ten má prioritu (shodný s timeline)
+    const off = state.spectrogram?.offline;
+    if (off?.t0 != null && off?.t1 != null) {
+      syncChartTimeRange(off.t0, off.t1, hours);
+    } else {
+      syncChartTimeRange(t0, t1, hours);
+    }
     state.chart.update("none");
 
     const s = data.stats || {};
@@ -841,7 +876,15 @@ function bind() {
   });
   $("metricSelect").addEventListener("change", refreshHistory);
   $("fftLiveBtn").addEventListener("click", clearSpectrogramSelection);
-  $("apiLogOpen").addEventListener("click", openApiLogPopup);
+  $("offlineExpandBtn")?.addEventListener("click", () => {
+    const btn = $("offlineExpandBtn");
+    const gapsEl = $("offlineGaps");
+    const open = btn.getAttribute("aria-expanded") !== "true";
+    btn.setAttribute("aria-expanded", open ? "true" : "false");
+    btn.classList.toggle("is-active", open);
+    btn.textContent = open ? "Skrýt" : "Rozšířené";
+    gapsEl.hidden = !open;
+  });
 
   const canvas = $("spectrogram");
   canvas.addEventListener("click", (ev) => {
@@ -875,6 +918,7 @@ function bind() {
 }
 
 initChart();
+initOfflineChart();
 bind();
 refreshLatest();
 refreshHistory();

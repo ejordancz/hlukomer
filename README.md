@@ -33,12 +33,13 @@ Po změně spektra je potřeba **znovu flashnout** ESP (`esphome run esphome/hlu
 
 ```bash
 cp .env.example .env
-# nastav INGEST_API_KEY; limity: ALERT_DAY_DBA / ALERT_NIGHT_DBA (6–22 / noc)
+# nastav INGEST_API_KEY a ADMIN_PASSWORD; limity: ALERT_DAY_DBA / ALERT_NIGHT_DBA (6–22 / noc)
 
 docker compose up -d --build
 ```
 
 Dashboard: http://localhost:8080  
+Administrace (backup/restore DB): http://localhost:8080/admin — heslo jen z `ADMIN_PASSWORD` v `.env`.
 
 API:
 
