@@ -66,22 +66,21 @@ $("logoutBtn").addEventListener("click", async () => {
 });
 
 $("backupBtn").addEventListener("click", async () => {
-  setStatus("Stahuji zálohu…");
+  setStatus("Připravuji zálohu…");
   try {
-    const res = await api("/api/admin/backup");
-    if (!res.ok) throw new Error("backup failed");
-    const blob = await res.blob();
-    const url = URL.createObjectURL(blob);
+    // Ověření session předem — samotné stažení jde přes <a download>,
+    // aby prohlížeč streamoval na disk (ne do RAM jako u res.blob()).
+    const probe = await api("/api/admin/session");
+    if (!probe.ok) throw new Error("Neautorizováno — přihlaste se znovu.");
     const a = document.createElement("a");
-    a.href = url;
+    a.href = "/api/admin/backup";
     a.download = "hlukomer.db";
     document.body.appendChild(a);
     a.click();
     a.remove();
-    URL.revokeObjectURL(url);
-    setStatus("Záloha stažena.");
-  } catch {
-    setStatus("Stažení zálohy selhalo.", true);
+    setStatus("Stažení zálohy zahájeno.");
+  } catch (err) {
+    setStatus(err?.message || "Stažení zálohy selhalo.", true);
   }
 });
 

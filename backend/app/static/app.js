@@ -819,89 +819,12 @@ function renderOfflineStats(offline) {
   gapsEl.hidden = !expanded;
 }
 
+/** Hourly ping — keeps met.no cache warm; UI je jen weather timeline. */
 async function refreshWeather() {
-  const panel = $("weatherPanel");
-  if (!panel) return;
   try {
-    const data = await fetchJson("/api/v1/weather");
-    if (!data.configured) {
-      panel.classList.add("is-error");
-      $("weatherDesc").textContent = "nenastaveno";
-      $("weatherTemp").textContent = "LAT/LON v .env";
-      $("weatherWind").textContent = "—";
-      $("weatherPrecip").textContent = "—";
-      $("weatherSkew").hidden = true;
-      $("weatherMeta").textContent = "";
-      $("weatherIcon").className = "weather-icon mdi mdi-map-marker-off";
-      return;
-    }
-    if (!data.current) {
-      panel.classList.add("is-error");
-      $("weatherDesc").textContent = "nedostupné";
-      $("weatherTemp").textContent = data.error || "—";
-      $("weatherSkew").hidden = true;
-      $("weatherMeta").textContent = "";
-      return;
-    }
-
-    panel.classList.remove("is-error");
-    const c = data.current;
-    const icon = c.icon_class || "mdi-weather-partly-cloudy";
-    $("weatherIcon").className = `weather-icon mdi ${icon}`;
-    $("weatherDesc").textContent = c.description || "—";
-    $("weatherTemp").textContent =
-      c.temperature_c != null ? `${Number(c.temperature_c).toFixed(1)} °C` : "—";
-
-    const windParts = [];
-    if (c.wind_speed_ms != null) windParts.push(`${Number(c.wind_speed_ms).toFixed(1)} m/s`);
-    if (c.wind_from_direction_cardinal) windParts.push(c.wind_from_direction_cardinal);
-    $("weatherWind").textContent = windParts.length ? windParts.join(" ") : "—";
-
-    const arrow = $("weatherWindArrow");
-    if (c.wind_from_direction_deg != null) {
-      arrow.style.transform = `rotate(${Number(c.wind_from_direction_deg)}deg)`;
-      arrow.hidden = false;
-    } else {
-      arrow.style.transform = "";
-      arrow.hidden = true;
-    }
-
-    $("weatherPrecip").textContent =
-      c.precipitation_1h_mm != null
-        ? `${Number(c.precipitation_1h_mm).toFixed(1)} mm`
-        : "—";
-
-    const skew = data.skew_factors || [];
-    const skewEl = $("weatherSkew");
-    if (skew.length) {
-      const high = skew.some((s) => s.level === "high");
-      skewEl.hidden = false;
-      skewEl.classList.toggle("is-high", high);
-      skewEl.textContent = skew.map((s) => s.label).join(" · ");
-    } else {
-      skewEl.hidden = true;
-      skewEl.textContent = "";
-    }
-
-    const sun = data.sun || {};
-    const parts = [];
-    if (sun.sunrise) {
-      const d = new Date(sun.sunrise);
-      parts.push(
-        `↑${d.toLocaleTimeString("cs-CZ", { hour: "2-digit", minute: "2-digit", hour12: false })}`
-      );
-    }
-    if (sun.sunset) {
-      const d = new Date(sun.sunset);
-      parts.push(
-        `↓${d.toLocaleTimeString("cs-CZ", { hour: "2-digit", minute: "2-digit", hour12: false })}`
-      );
-    }
-    $("weatherMeta").textContent = parts.join(" ");
+    await fetchJson("/api/v1/weather");
   } catch (err) {
     console.error(err);
-    $("weatherPanel")?.classList.add("is-error");
-    if ($("weatherDesc")) $("weatherDesc").textContent = "nedostupné";
   }
 }
 
@@ -965,8 +888,22 @@ function renderWeatherTimeline() {
       const icon = s.icon_class || "mdi-weather-partly-cloudy";
       const temp =
         s.temperature_c != null ? `${Math.round(Number(s.temperature_c))}°` : "";
+      let windHtml = "";
+      if (s.wind_speed_ms != null) {
+        const spd = Number(s.wind_speed_ms).toFixed(1);
+        const deg =
+          s.wind_from_direction_deg != null
+            ? ` style="transform:rotate(${Number(s.wind_from_direction_deg)}deg)"`
+            : "";
+        windHtml = `<span class="weather-slot-wind"><span class="weather-slot-wind-arrow"${deg} aria-hidden="true">↑</span>${spd}</span>`;
+      }
+      let precipHtml = "";
+      if (s.precipitation_1h_mm != null) {
+        const mm = Number(s.precipitation_1h_mm).toFixed(1);
+        precipHtml = `<span class="weather-slot-precip"><span class="mdi mdi-water weather-slot-precip-icon" aria-hidden="true"></span>${mm}</span>`;
+      }
       const title = weatherSlotTitle(s).replace(/"/g, "&quot;");
-      return `<span class="${cls}" style="left:${pct.toFixed(2)}%" title="${title}"><span class="mdi ${icon}" aria-hidden="true"></span><span class="weather-slot-temp">${temp}</span></span>`;
+      return `<span class="${cls}" style="left:${pct.toFixed(2)}%" title="${title}"><span class="mdi ${icon}" aria-hidden="true"></span><span class="weather-slot-temp">${temp}</span>${windHtml}${precipHtml}</span>`;
     })
     .join("");
 }

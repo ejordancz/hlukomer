@@ -22,6 +22,7 @@ from fastapi import Cookie, Depends, FastAPI, Header, HTTPException, Query, Requ
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
+from starlette.background import BackgroundTask
 
 from . import weather as weather_svc
 
@@ -1167,12 +1168,35 @@ def admin_session(_: None = Depends(require_admin_session)) -> dict[str, str]:
 
 @app.get("/api/admin/backup")
 def admin_backup(_: None = Depends(require_admin_session)) -> FileResponse:
+    """Konzistentní hot-copy přes sqlite3.backup() (bezpečné i při ingestu)."""
     if not DB_PATH.exists():
         raise HTTPException(status_code=404, detail="Databáze neexistuje")
+
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(
+        delete=False, dir=DATA_DIR, suffix=".backup.db"
+    ) as tmp:
+        tmp_path = Path(tmp.name)
+
+    try:
+        src = sqlite3.connect(DB_PATH, timeout=60)
+        try:
+            dst = sqlite3.connect(tmp_path)
+            try:
+                src.backup(dst)
+            finally:
+                dst.close()
+        finally:
+            src.close()
+    except sqlite3.Error as exc:
+        tmp_path.unlink(missing_ok=True)
+        raise HTTPException(status_code=500, detail="Záloha selhala") from exc
+
     return FileResponse(
-        path=DB_PATH,
+        path=tmp_path,
         filename="hlukomer.db",
         media_type="application/octet-stream",
+        background=BackgroundTask(tmp_path.unlink, missing_ok=True),
     )
 
 
