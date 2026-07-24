@@ -604,6 +604,7 @@ main {
 }
 
 .chart-wrap {
+  position: relative;
   border-top: 1px solid var(--line);
   border-bottom: 1px solid var(--line);
   padding: 1rem 0 0.25rem;
@@ -657,6 +658,100 @@ main {
   border-radius: 0;
   background: #ff2d95;
   box-shadow: none;
+}
+
+.chart-legend .swatch.aircraft {
+  width: auto;
+  height: auto;
+  background: transparent;
+  box-shadow: none;
+  color: #c9d6cf;
+  font-size: 0.95rem;
+  line-height: 1;
+}
+
+.aircraft-popup {
+  position: absolute;
+  z-index: 20;
+  min-width: 12.5rem;
+  max-width: min(18rem, calc(100% - 1.5rem));
+  padding: 0.7rem 0.85rem 0.75rem;
+  border-radius: 0.45rem;
+  border: 1px solid rgba(232, 240, 236, 0.16);
+  background: rgba(10, 16, 22, 0.94);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.45);
+  color: var(--text, #e8f0ec);
+  font-size: 0.82rem;
+  line-height: 1.35;
+  pointer-events: auto;
+}
+
+.aircraft-popup[hidden] {
+  display: none !important;
+}
+
+.aircraft-popup-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.6rem;
+  margin-bottom: 0.45rem;
+}
+
+.aircraft-popup-title {
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-weight: 500;
+  font-size: 0.95rem;
+  letter-spacing: 0.02em;
+}
+
+.aircraft-popup-sub {
+  color: var(--muted, #a8bab2);
+  font-size: 0.72rem;
+  margin-top: 0.15rem;
+}
+
+.aircraft-popup-close {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--muted, #a8bab2);
+  cursor: pointer;
+  font-size: 1.1rem;
+  line-height: 1;
+  padding: 0.05rem;
+}
+
+.aircraft-popup-close:hover {
+  color: #e8f0ec;
+}
+
+.aircraft-popup-grid {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.2rem 0.7rem;
+  margin: 0;
+}
+
+.aircraft-popup-grid dt {
+  margin: 0;
+  color: var(--muted, #a8bab2);
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.aircraft-popup-grid dd {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.aircraft-popup-foot {
+  margin-top: 0.55rem;
+  padding-top: 0.4rem;
+  border-top: 1px solid rgba(232, 240, 236, 0.1);
+  color: var(--muted, #a8bab2);
+  font-size: 0.68rem;
 }
 
 .weather-under {

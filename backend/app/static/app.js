@@ -48,6 +48,9 @@ const state = {
   hoverCol: null,
   weatherTimeline: [],
   chartRange: { t0: 0, t1: 1 },
+  aircraftOverflights: [],
+  aircraftHits: [],
+  aircraftPopupId: null,
 };
 
 function fmtDb(v) {
@@ -265,6 +268,227 @@ const offlineBandsPlugin = {
   },
 };
 
+const AIRCRAFT_HIT_R = 14;
+
+function drawAircraftIcon(ctx, x, y, active) {
+  const s = active ? 11 : 9.5;
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate(-Math.PI / 2);
+  ctx.fillStyle = active ? "#e8f0ec" : "#b8c9c0";
+  ctx.strokeStyle = "rgba(2, 6, 14, 0.65)";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(0, -s);
+  ctx.lineTo(s * 0.32, s * 0.15);
+  ctx.lineTo(s * 0.9, s * 0.32);
+  ctx.lineTo(s * 0.32, s * 0.42);
+  ctx.lineTo(0, s * 0.95);
+  ctx.lineTo(-s * 0.32, s * 0.42);
+  ctx.lineTo(-s * 0.9, s * 0.32);
+  ctx.lineTo(-s * 0.32, s * 0.15);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+  ctx.restore();
+}
+
+/** X pozice času v chartArea podle aktuální osy grafu. */
+function aircraftPixelX(chart, tSec) {
+  const { chartArea, scales } = chart;
+  const xScale = scales?.x;
+  if (!chartArea || !xScale) return null;
+  const min = Number(xScale.min);
+  const max = Number(xScale.max);
+  if (!Number.isFinite(min) || !Number.isFinite(max) || max <= min) return null;
+  const tMs = tSec * 1000;
+  if (tMs < min || tMs > max) return null;
+  const pct = (tMs - min) / (max - min);
+  return chartArea.left + pct * (chartArea.right - chartArea.left);
+}
+
+/** Y na křivce dBA v čase t (lineární interpolace), jinak null. */
+function aircraftPixelYOnCurve(chart, tSec) {
+  const yScale = chart.scales?.y;
+  const data = chart.data?.datasets?.[0]?.data;
+  if (!yScale || !data?.length) return null;
+  const tMs = tSec * 1000;
+  let prev = null;
+  let next = null;
+  for (const p of data) {
+    if (p == null || p.x == null || p.y == null) continue;
+    if (p.x <= tMs) prev = p;
+    if (p.x >= tMs) {
+      next = p;
+      break;
+    }
+  }
+  if (prev && next) {
+    if (next.x === prev.x) return yScale.getPixelForValue(prev.y);
+    const u = (tMs - prev.x) / (next.x - prev.x);
+    const v = prev.y + (next.y - prev.y) * u;
+    return yScale.getPixelForValue(v);
+  }
+  return null;
+}
+
+/** Markery přeletů: svislá čára v čase closest_ts + ikona. */
+const aircraftMarkersPlugin = {
+  id: "aircraftMarkers",
+  afterDatasetsDraw(chart) {
+    const items = state.aircraftOverflights || [];
+    const { ctx, chartArea, scales } = chart;
+    state.aircraftHits = [];
+    if (!chartArea || !scales?.x || !items.length) return;
+
+    for (const item of items) {
+      if (item.t == null) continue;
+      const px = aircraftPixelX(chart, item.t);
+      if (px == null) continue;
+
+      const onCurve = aircraftPixelYOnCurve(chart, item.t);
+      const iconY =
+        onCurve != null
+          ? Math.min(chartArea.bottom - 12, Math.max(chartArea.top + 12, onCurve - 14))
+          : chartArea.top + 14;
+      const active = state.aircraftPopupId === item.id;
+
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(
+        chartArea.left,
+        chartArea.top,
+        chartArea.right - chartArea.left,
+        chartArea.bottom - chartArea.top
+      );
+      ctx.clip();
+
+      ctx.strokeStyle = active ? "rgba(232,240,236,0.55)" : "rgba(184,201,192,0.40)";
+      ctx.lineWidth = 1;
+      ctx.setLineDash([3, 3]);
+      ctx.beginPath();
+      ctx.moveTo(px + 0.5, chartArea.top);
+      ctx.lineTo(px + 0.5, chartArea.bottom);
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      if (onCurve != null) {
+        ctx.fillStyle = active ? "#e8f0ec" : "rgba(184,201,192,0.9)";
+        ctx.beginPath();
+        ctx.arc(px, onCurve, active ? 3.2 : 2.4, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.restore();
+
+      drawAircraftIcon(ctx, px, iconY, active);
+      state.aircraftHits.push({ id: item.id, x: px, y: iconY, item });
+    }
+  },
+};
+
+function aircraftLabel(item) {
+  const cs = (item.callsign || "").trim();
+  return cs || (item.icao24 || "—").toUpperCase();
+}
+
+function fmtKm(m) {
+  if (m == null || Number.isNaN(m)) return "—";
+  return `${(Number(m) / 1000).toFixed(1)} km`;
+}
+
+function fmtAltM(m) {
+  if (m == null || Number.isNaN(m)) return "—";
+  return `${Math.round(Number(m))} m`;
+}
+
+function fmtKmh(ms) {
+  if (ms == null || Number.isNaN(ms)) return "—";
+  return `${Math.round(Number(ms) * 3.6)} km/h`;
+}
+
+function fmtTrack(deg) {
+  if (deg == null || Number.isNaN(deg)) return "—";
+  return `${Math.round(Number(deg) % 360)}°`;
+}
+
+function fmtVRate(ms) {
+  if (ms == null || Number.isNaN(ms)) return "—";
+  const v = Number(ms);
+  if (Math.abs(v) < 0.5) return "rovně";
+  const sign = v > 0 ? "↑" : "↓";
+  return `${sign} ${Math.abs(v).toFixed(1)} m/s`;
+}
+
+function closeAircraftPopup() {
+  const el = $("aircraftPopup");
+  if (el) {
+    el.hidden = true;
+    el.innerHTML = "";
+  }
+  state.aircraftPopupId = null;
+  if (state.chart) state.chart.draw();
+}
+
+function openAircraftPopup(item, clientX, clientY) {
+  const el = $("aircraftPopup");
+  const wrap = el?.closest(".chart-wrap") || el?.parentElement;
+  if (!el || !wrap || !item) return;
+
+  state.aircraftPopupId = item.id;
+  const country = item.origin_country || "—";
+  el.innerHTML = `
+    <div class="aircraft-popup-head">
+      <div>
+        <div class="aircraft-popup-title">${aircraftLabel(item)}</div>
+        <div class="aircraft-popup-sub">${(item.icao24 || "").toUpperCase()} · ${country}</div>
+      </div>
+      <button type="button" class="aircraft-popup-close" id="aircraftPopupClose" aria-label="Zavřít">×</button>
+    </div>
+    <dl class="aircraft-popup-grid">
+      <dt>Čas</dt><dd>${fmtTime(item.t)}</dd>
+      <dt>Výška</dt><dd>${fmtAltM(item.altitude_m)}</dd>
+      <dt>Vzdál.</dt><dd>${fmtKm(item.distance_m)}</dd>
+      <dt>Rychlost</dt><dd>${fmtKmh(item.velocity_ms)}</dd>
+      <dt>Směr</dt><dd>${fmtTrack(item.track_deg)}</dd>
+      <dt>Stoupání</dt><dd>${fmtVRate(item.vertical_rate_ms)}</dd>
+    </dl>
+    <div class="aircraft-popup-foot">OpenSky Network</div>
+  `;
+  el.hidden = false;
+
+  const wrapRect = wrap.getBoundingClientRect();
+  const approxW = 220;
+  const approxH = 210;
+  let left = clientX - wrapRect.left + 12;
+  let top = clientY - wrapRect.top + 12;
+  left = Math.max(8, Math.min(left, wrapRect.width - approxW - 8));
+  top = Math.max(8, Math.min(top, wrapRect.height - approxH - 8));
+  el.style.left = `${left}px`;
+  el.style.top = `${top}px`;
+
+  $("aircraftPopupClose")?.addEventListener("click", (ev) => {
+    ev.stopPropagation();
+    closeAircraftPopup();
+  });
+  if (state.chart) state.chart.draw();
+}
+
+function hitAircraftMarker(canvas, clientX, clientY) {
+  const rect = canvas.getBoundingClientRect();
+  const mx = clientX - rect.left;
+  const my = clientY - rect.top;
+  let best = null;
+  let bestD = AIRCRAFT_HIT_R;
+  for (const hit of state.aircraftHits || []) {
+    const d = Math.hypot(hit.x - mx, hit.y - my);
+    if (d <= bestD) {
+      bestD = d;
+      best = hit;
+    }
+  }
+  return best;
+}
+
 /** Společný časový rozsah hlavní graf + offline timeline. */
 function syncChartTimeRange(t0, t1, hours) {
   const min = t0 * 1000;
@@ -282,7 +506,7 @@ function initChart() {
   const ctx = $("chart").getContext("2d");
   state.chart = new Chart(ctx, {
     type: "line",
-    plugins: [dayNightBandsPlugin],
+    plugins: [dayNightBandsPlugin, aircraftMarkersPlugin],
     data: {
       datasets: [
         {
@@ -789,6 +1013,7 @@ function renderOfflineStats(offline) {
 
   const t0 = offline.t0 ?? Date.now() / 1000 - hours * 3600;
   const t1 = offline.t1 ?? Date.now() / 1000;
+  state.chartRange = { t0, t1 };
   syncChartTimeRange(t0, t1, hours);
 
   if (state.offlineChart) {
@@ -929,6 +1154,13 @@ async function refreshHistory() {
     state.period = data.alert_period ?? state.period;
     state.nightBands = data.night_bands || [];
     state.weatherTimeline = data.weather_timeline || [];
+    state.aircraftOverflights = data.aircraft_overflights || [];
+    if (
+      state.aircraftPopupId != null &&
+      !state.aircraftOverflights.some((a) => a.id === state.aircraftPopupId)
+    ) {
+      closeAircraftPopup();
+    }
 
     const points = (data.points || []).map((p) => ({
       x: p.t * 1000,
@@ -969,6 +1201,7 @@ function bind() {
   $("rangeSelect").addEventListener("change", () => {
     state.selectedTs = null;
     state.selectedSpectrum = null;
+    closeAircraftPopup();
     refreshHistory();
     refreshSpectrogram();
   });
@@ -982,6 +1215,33 @@ function bind() {
     btn.classList.toggle("is-active", open);
     btn.textContent = open ? "Skrýt" : "Rozšířené";
     gapsEl.hidden = !open;
+  });
+
+  const mainChart = $("chart");
+  mainChart?.addEventListener("click", (ev) => {
+    const hit = hitAircraftMarker(mainChart, ev.clientX, ev.clientY);
+    if (hit) {
+      openAircraftPopup(hit.item, ev.clientX, ev.clientY);
+      return;
+    }
+    closeAircraftPopup();
+  });
+  mainChart?.addEventListener("mousemove", (ev) => {
+    const hit = hitAircraftMarker(mainChart, ev.clientX, ev.clientY);
+    mainChart.style.cursor = hit ? "pointer" : "";
+  });
+  mainChart?.addEventListener("mouseleave", () => {
+    mainChart.style.cursor = "";
+  });
+  document.addEventListener("keydown", (ev) => {
+    if (ev.key === "Escape") closeAircraftPopup();
+  });
+  document.addEventListener("click", (ev) => {
+    const popup = $("aircraftPopup");
+    if (!popup || popup.hidden) return;
+    if (popup.contains(ev.target)) return;
+    if (mainChart && (ev.target === mainChart || mainChart.contains(ev.target))) return;
+    closeAircraftPopup();
   });
 
   const canvas = $("spectrogram");
@@ -1015,6 +1275,7 @@ function bind() {
   window.addEventListener("resize", () => {
     drawSpectrogram();
     renderWeatherTimeline();
+    closeAircraftPopup();
   });
 }
 

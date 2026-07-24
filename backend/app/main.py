@@ -24,6 +24,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from starlette.background import BackgroundTask
 
+from . import aircraft as aircraft_svc
 from . import weather as weather_svc
 
 DATA_DIR = Path(os.getenv("DATA_DIR", "/data"))
@@ -489,6 +490,27 @@ def ensure_db() -> None:
                 skew_json TEXT
             );
             CREATE INDEX IF NOT EXISTS idx_weather_ts ON weather_snapshots(ts);
+            CREATE TABLE IF NOT EXISTS aircraft_overflights (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                icao24 TEXT NOT NULL,
+                callsign TEXT,
+                origin_country TEXT,
+                first_seen_ts REAL NOT NULL,
+                last_seen_ts REAL NOT NULL,
+                closest_ts REAL NOT NULL,
+                closest_lat REAL,
+                closest_lon REAL,
+                closest_distance_m REAL NOT NULL,
+                closest_altitude_m REAL NOT NULL,
+                closest_velocity_ms REAL,
+                closest_track_deg REAL,
+                closest_vertical_rate_ms REAL,
+                updated_at REAL NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_aircraft_closest_ts
+                ON aircraft_overflights(closest_ts);
+            CREATE INDEX IF NOT EXISTS idx_aircraft_icao_last
+                ON aircraft_overflights(icao24, last_seen_ts);
             """
         )
 
@@ -602,12 +624,18 @@ def on_startup() -> None:
     prune_old()
     weather_svc.set_persist_callback(persist_weather_samples)
     weather_svc.start_hourly_refresh()
+    aircraft_svc.set_persist_callback(persist_aircraft_sightings)
+    aircraft_svc.start_aircraft_poll()
 
 
 def prune_old() -> None:
     now = utc_now()
     cutoff_all = now - RETENTION_DAYS * 86400
     cutoff_live = now - LIVE_RETENTION_DAYS * 86400
+    ac_days = aircraft_svc.get_config().retention_days
+    if ac_days is None:
+        ac_days = RETENTION_DAYS
+    cutoff_aircraft = now - max(1, ac_days) * 86400
     with db() as conn:
         conn.execute("DELETE FROM measurements WHERE ts < ?", (cutoff_all,))
         placeholders = ",".join("?" * len(LIVE_METRICS))
@@ -616,6 +644,10 @@ def prune_old() -> None:
             (*LIVE_METRICS, cutoff_live),
         )
         conn.execute("DELETE FROM weather_snapshots WHERE ts < ?", (cutoff_all,))
+        conn.execute(
+            "DELETE FROM aircraft_overflights WHERE closest_ts < ?",
+            (cutoff_aircraft,),
+        )
 
 
 def persist_weather_samples(samples: list[dict[str, Any]]) -> None:
@@ -661,6 +693,149 @@ def persist_weather_samples(samples: list[dict[str, Any]]) -> None:
                     json.dumps(skew, ensure_ascii=False),
                 ),
             )
+
+
+def persist_aircraft_sightings(sightings: list[aircraft_svc.Sighting]) -> None:
+    """UPSERT přeletových událostí podle icao24 + GAP_S."""
+    if not sightings:
+        return
+    gap_s = aircraft_svc.get_config().gap_s
+    now = utc_now()
+    with db() as conn:
+        for s in sightings:
+            open_row = conn.execute(
+                """
+                SELECT id, closest_distance_m FROM aircraft_overflights
+                WHERE icao24 = ? AND (? - last_seen_ts) <= ?
+                ORDER BY last_seen_ts DESC
+                LIMIT 1
+                """,
+                (s.icao24, s.ts, gap_s),
+            ).fetchone()
+            if open_row:
+                if s.distance_m < float(open_row["closest_distance_m"]):
+                    conn.execute(
+                        """
+                        UPDATE aircraft_overflights SET
+                            callsign = COALESCE(?, callsign),
+                            origin_country = COALESCE(?, origin_country),
+                            last_seen_ts = ?,
+                            closest_ts = ?,
+                            closest_lat = ?,
+                            closest_lon = ?,
+                            closest_distance_m = ?,
+                            closest_altitude_m = ?,
+                            closest_velocity_ms = ?,
+                            closest_track_deg = ?,
+                            closest_vertical_rate_ms = ?,
+                            updated_at = ?
+                        WHERE id = ?
+                        """,
+                        (
+                            s.callsign,
+                            s.origin_country,
+                            s.ts,
+                            s.ts,
+                            s.lat,
+                            s.lon,
+                            s.distance_m,
+                            s.altitude_m,
+                            s.velocity_ms,
+                            s.track_deg,
+                            s.vertical_rate_ms,
+                            now,
+                            open_row["id"],
+                        ),
+                    )
+                else:
+                    conn.execute(
+                        """
+                        UPDATE aircraft_overflights SET
+                            callsign = COALESCE(?, callsign),
+                            origin_country = COALESCE(?, origin_country),
+                            last_seen_ts = MAX(last_seen_ts, ?),
+                            updated_at = ?
+                        WHERE id = ?
+                        """,
+                        (
+                            s.callsign,
+                            s.origin_country,
+                            s.ts,
+                            now,
+                            open_row["id"],
+                        ),
+                    )
+            else:
+                conn.execute(
+                    """
+                    INSERT INTO aircraft_overflights (
+                        icao24, callsign, origin_country,
+                        first_seen_ts, last_seen_ts, closest_ts,
+                        closest_lat, closest_lon,
+                        closest_distance_m, closest_altitude_m,
+                        closest_velocity_ms, closest_track_deg,
+                        closest_vertical_rate_ms, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        s.icao24,
+                        s.callsign,
+                        s.origin_country,
+                        s.ts,
+                        s.ts,
+                        s.ts,
+                        s.lat,
+                        s.lon,
+                        s.distance_m,
+                        s.altitude_m,
+                        s.velocity_ms,
+                        s.track_deg,
+                        s.vertical_rate_ms,
+                        now,
+                    ),
+                )
+
+
+AIRCRAFT_HISTORY_CAP = 500
+
+
+def fetch_aircraft_overflights(t0: float, t1: float) -> list[dict[str, Any]]:
+    """Přeletové markery v časovém rozsahu grafu (max AIRCRAFT_HISTORY_CAP)."""
+    with db() as conn:
+        rows = conn.execute(
+            """
+            SELECT
+                id, icao24, callsign, origin_country,
+                closest_ts, closest_distance_m, closest_altitude_m,
+                closest_velocity_ms, closest_track_deg, closest_vertical_rate_ms,
+                first_seen_ts, last_seen_ts
+            FROM aircraft_overflights
+            WHERE closest_ts >= ? AND closest_ts <= ?
+            ORDER BY closest_distance_m ASC, closest_ts DESC
+            LIMIT ?
+            """,
+            (t0, t1, AIRCRAFT_HISTORY_CAP),
+        ).fetchall()
+    # Pro UI chronologicky
+    items = [
+        {
+            "id": r["id"],
+            "t": r["closest_ts"],
+            "icao24": r["icao24"],
+            "callsign": r["callsign"],
+            "origin_country": r["origin_country"],
+            "distance_m": r["closest_distance_m"],
+            "altitude_m": r["closest_altitude_m"],
+            "velocity_ms": r["closest_velocity_ms"],
+            "track_deg": r["closest_track_deg"],
+            "vertical_rate_ms": r["closest_vertical_rate_ms"],
+            "first_seen_ts": r["first_seen_ts"],
+            "last_seen_ts": r["last_seen_ts"],
+        }
+        for r in rows
+    ]
+    items.sort(key=lambda x: x["t"])
+    return items
 
 
 def weather_step_seconds(hours: float) -> float:
@@ -1087,6 +1262,7 @@ def history(
     meta = threshold_meta()
     night_bands, sun_source = build_night_bands(t0, t1)
     now = utc_now()
+    ac_cfg = aircraft_svc.get_config()
     return {
         "metric": metric,
         "device_id": device_id,
@@ -1098,9 +1274,22 @@ def history(
         "night_bands": night_bands,
         "sun": {"source": sun_source},
         "weather_timeline": fetch_weather_timeline(since, now, hours),
+        "aircraft_overflights": fetch_aircraft_overflights(since, now),
+        "aircraft": {
+            "enabled": ac_cfg.enabled,
+            "source": "opensky",
+            "max_altitude_m": ac_cfg.max_altitude_m,
+            "max_distance_km": ac_cfg.max_distance_km,
+        },
         "points": points,
         "stats": stats,
     }
+
+
+@app.get("/api/v1/aircraft")
+def aircraft_status() -> dict[str, Any]:
+    """Stav OpenSky pollu (debug)."""
+    return aircraft_svc.status_payload()
 
 
 @app.get("/api/v1/weather")
