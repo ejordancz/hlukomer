@@ -33,7 +33,6 @@ const LF_BANDS = new Set([
   "200",
 ]);
 
-const SPEC_HEIGHT = 360;
 const CHART_SPEC_HEIGHT = 288;
 /** Spektrogram pod hlavním grafem jen pro rozsah ≤ 6 h. */
 const CHART_SPEC_MAX_HOURS = 6;
@@ -42,35 +41,30 @@ const state = {
   threshold: 45,
   period: "day",
   chart: null,
-  offlineChart: null,
   nightBands: [],
-  offlineGaps: [],
   liveSpectrum: null,
-  spectrogram: null,
-  hoverCol: null,
   weatherTimeline: [],
   chartRange: { t0: 0, t1: 1 },
   aircraftOverflights: [],
   aircraftPopupId: null,
   historyReqId: 0,
-  spectrogramReqId: 0,
   chartSpecReqId: 0,
   chartSpectrogram: null,
   hoverTs: null,
+  /** Tooltip hlavního grafu při hoveru nad markrem (letadlo). */
+  hoverTooltip: false,
   /** Hlavní graf: true = okno končí „teď“, start se posouvá s časem. */
   chartLive: true,
   /** Pevný začátek okna grafu (unix s), když chartLive=false. */
   chartStart: null,
   chartPanning: false,
-  /** Spektrogram: true = okno končí „teď“, start se posouvá s časem. */
-  specLive: true,
 };
 
 const CHART_MAX_LOOKBACK_S = 90 * 24 * 3600;
 
 /** Aktuální časový rozsah hlavního grafu podle selectu (+ live / pan). */
 function selectedHistoryRange() {
-  const hours = Number($("rangeSelect")?.value || 24);
+  const hours = Number($("rangeSelect")?.value || 6);
   const span = hours * 3600;
   const now = Date.now() / 1000;
   if (state.chartLive || state.chartStart == null) {
@@ -100,50 +94,6 @@ function setChartLive(live) {
   if (state.chartLive) state.chartStart = null;
 }
 
-/** Rozsah spektrogramu: živě (konec = teď) nebo pevný start z inputu. */
-function selectedSpectrogramRange() {
-  const hours = Number($("specRangeSelect")?.value || 6);
-  const span = hours * 3600;
-  if (state.specLive) {
-    const t1 = Date.now() / 1000;
-    return { t0: t1 - span, t1, hours, start: null };
-  }
-  const start = fromDatetimeLocalValue($("specStartInput")?.value);
-  if (start == null) {
-    const t1 = Date.now() / 1000;
-    return { t0: t1 - span, t1, hours, start: null };
-  }
-  const t0 = start;
-  const t1 = Math.min(start + span, Date.now() / 1000);
-  return { t0, t1, hours, start: t0 };
-}
-
-function toDatetimeLocalValue(tsSec) {
-  const d = new Date(tsSec * 1000);
-  const pad = (n) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
-}
-
-function fromDatetimeLocalValue(s) {
-  if (!s) return null;
-  const t = new Date(s).getTime();
-  return Number.isFinite(t) ? t / 1000 : null;
-}
-
-function setSpecLive(live) {
-  state.specLive = !!live;
-  const btn = $("specLiveBtn");
-  if (btn) {
-    btn.classList.toggle("is-active", state.specLive);
-    btn.setAttribute("aria-pressed", state.specLive ? "true" : "false");
-  }
-  if (state.specLive) {
-    const { t0 } = selectedSpectrogramRange();
-    const input = $("specStartInput");
-    if (input) input.value = toDatetimeLocalValue(t0);
-  }
-}
-
 /** Osa X hlavního grafu + markery / mini-spektrogram pod ním. */
 function applyHistoryTimeRange(t0, t1, hours) {
   state.chartRange = { t0, t1 };
@@ -168,7 +118,7 @@ function applyHistoryTimeRange(t0, t1, hours) {
   });
 }
 
-function chartSpecEnabled(hours = Number($("rangeSelect")?.value || 24)) {
+function chartSpecEnabled(hours = Number($("rangeSelect")?.value || 6)) {
   return Number(hours) <= CHART_SPEC_MAX_HOURS + 1e-9;
 }
 
@@ -192,15 +142,6 @@ function syncChartSpecVisibility(hours) {
   }
 }
 
-/** Osa X offline pásu pod spektrogramem. */
-function applyOfflineTimeRange(t0, t1, hours) {
-  const chart = state.offlineChart;
-  if (!chart) return;
-  chart.options.scales.x.min = t0 * 1000;
-  chart.options.scales.x.max = t1 * 1000;
-  chart.options.scales.x.time.displayFormats = chartTimeFormats(hours);
-  chart.update("none");
-}
 
 function fmtDb(v) {
   if (v == null || Number.isNaN(v)) return "—.—";
@@ -210,26 +151,6 @@ function fmtDb(v) {
 function fmtPct(v) {
   if (v == null || Number.isNaN(v)) return "—";
   return `${Number(v).toFixed(0)} %`;
-}
-
-/** Lidská délka intervalu (s → „2 h 15 min“). */
-function fmtDuration(seconds) {
-  if (seconds == null || Number.isNaN(seconds)) return "—";
-  let s = Math.max(0, Math.round(Number(seconds)));
-  if (s < 60) return `${s} s`;
-  const d = Math.floor(s / 86400);
-  s %= 86400;
-  const h = Math.floor(s / 3600);
-  s %= 3600;
-  const m = Math.floor(s / 60);
-  s %= 60;
-  const parts = [];
-  if (d) parts.push(`${d} d`);
-  if (h) parts.push(`${h} h`);
-  if (m && d < 2) parts.push(`${m} min`);
-  if (!d && !h && s) parts.push(`${s} s`);
-  if (!parts.length) parts.push("0 s");
-  return parts.join(" ");
 }
 
 /** Jednotný český 24h formát času (bez AM/PM). */
@@ -281,26 +202,55 @@ function setLevelClass(el, value) {
   else if (value >= state.threshold) el.classList.add("hot");
 }
 
+function setAllText(selector, text) {
+  document.querySelectorAll(selector).forEach((el) => {
+    el.textContent = text;
+  });
+}
+
+function fmtAge(ageSec) {
+  if (ageSec < 5) return "právě teď";
+  if (ageSec < 60) return `naposledy před ${ageSec} s`;
+  if (ageSec < 3600) return `naposledy před ${Math.round(ageSec / 60)} min`;
+  return `naposledy před ${Math.round(ageSec / 3600)} h`;
+}
+
 function updateOverLimit(laeq) {
-  const el = $("mOverLimit");
-  const sub = $("mOverLimitSub");
-  const label = $("mOverLimitLabel");
   const periodLabel = state.period === "night" ? "noc" : "den";
+  const labels = document.querySelectorAll(".js-over-label");
+  const values = document.querySelectorAll(".js-over-value");
+  const subs = document.querySelectorAll(".js-over-sub");
+
   if (laeq == null || state.threshold == null) {
-    el.textContent = "—.—";
-    el.classList.remove("over-limit", "under-limit");
-    label.textContent = "Od limitu";
-    sub.textContent = "dB vs limit";
+    labels.forEach((el) => {
+      el.textContent = "Od limitu";
+    });
+    values.forEach((el) => {
+      el.textContent = "—.—";
+      el.classList.remove("over-limit", "under-limit");
+    });
+    subs.forEach((el) => {
+      el.textContent = "dB vs limit";
+    });
     return;
   }
   const delta = laeq - state.threshold;
   const over = delta >= 0;
   const sign = over ? "+" : "−";
-  el.textContent = `${sign}${Math.abs(delta).toFixed(1)}`;
-  el.classList.toggle("over-limit", over);
-  el.classList.toggle("under-limit", !over);
-  label.textContent = over ? "Nad limitem" : "Pod limitem";
-  sub.textContent = `dB ${over ? "nad" : "pod"} ${state.threshold.toFixed(0)} dBA (${periodLabel})`;
+  const label = over ? "Nad limitem" : "Pod limitem";
+  const value = `${sign}${Math.abs(delta).toFixed(1)}`;
+  const sub = `dB ${over ? "nad" : "pod"} ${state.threshold.toFixed(0)} dBA (${periodLabel})`;
+  labels.forEach((el) => {
+    el.textContent = label;
+  });
+  values.forEach((el) => {
+    el.textContent = value;
+    el.classList.toggle("over-limit", over);
+    el.classList.toggle("under-limit", !over);
+  });
+  subs.forEach((el) => {
+    el.textContent = sub;
+  });
 }
 
 async function fetchJson(url) {
@@ -384,38 +334,6 @@ const dayNightBandsPlugin = {
   },
 };
 
-/** Pásy offline / online na časové ose pod spektrogramem. */
-const offlineBandsPlugin = {
-  id: "offlineBands",
-  beforeDatasetsDraw(chart) {
-    const gaps = state.offlineGaps;
-    const { ctx, chartArea, scales } = chart;
-    const x = scales.x;
-    if (!chartArea || !x) return;
-
-    const width = chartArea.right - chartArea.left;
-    const height = chartArea.bottom - chartArea.top;
-
-    ctx.save();
-    ctx.beginPath();
-    ctx.rect(chartArea.left, chartArea.top, width, height);
-    ctx.clip();
-
-    ctx.fillStyle = "rgba(126, 200, 163, 0.28)";
-    ctx.fillRect(chartArea.left, chartArea.top, width, height);
-
-    ctx.fillStyle = "rgba(232, 93, 76, 0.78)";
-    for (const gap of gaps) {
-      const x0 = x.getPixelForValue(gap.t0 * 1000);
-      const x1 = x.getPixelForValue(gap.t1 * 1000);
-      const left = Math.max(chartArea.left, Math.min(x0, x1));
-      const right = Math.min(chartArea.right, Math.max(x0, x1));
-      if (right - left < 0.5) continue;
-      ctx.fillRect(left, chartArea.top, right - left, height);
-    }
-    ctx.restore();
-  },
-};
 
 function aircraftLabel(item) {
   const cs = (item.callsign || "").trim();
@@ -570,7 +488,7 @@ function initChart() {
             autoSkipPadding: 16,
             callback(value) {
               if (typeof value !== "number") return "";
-              const hours = Number($("rangeSelect")?.value || 24);
+              const hours = Number($("rangeSelect")?.value || 6);
               return fmtAxisTime(value / 1000, { withDate: hours >= 48 });
             },
           },
@@ -608,99 +526,52 @@ function initChart() {
   });
 }
 
-function initOfflineChart() {
-  const canvas = $("offlineChart");
-  if (!canvas) return;
-  const ctx = canvas.getContext("2d");
-  state.offlineChart = new Chart(ctx, {
-    type: "line",
-    plugins: [offlineBandsPlugin],
-    data: {
-      datasets: [
-        {
-          label: "offline",
-          data: [],
-          borderWidth: 0,
-          pointRadius: 0,
-          fill: false,
-        },
-      ],
-    },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      animation: false,
-      interaction: { mode: "nearest", intersect: false, axis: "x" },
-      layout: { padding: 0 },
-      scales: {
-        x: {
-          type: "time",
-          time: {
-            tooltipFormat: "dd. MM. yyyy HH:mm:ss",
-            displayFormats: chartTimeFormats(24),
-          },
-          display: false,
-          grid: { display: false },
-        },
-        y: {
-          min: 0,
-          max: 1,
-          display: false,
-          grid: { display: false },
-        },
-      },
-      plugins: {
-        legend: { display: false },
-        tooltip: {
-          callbacks: {
-            title: (items) => {
-              const ts = items[0]?.parsed?.x;
-              if (ts == null) return "";
-              return fmtTime(ts / 1000);
-            },
-            label: (ctx) => {
-              const ts = ctx.parsed.x / 1000;
-              const gap = state.offlineGaps.find((g) => ts >= g.t0 && ts <= g.t1);
-              return gap
-                ? `bez dat · ${fmtDuration(gap.duration_s)}`
-                : "data přítomna";
-            },
-          },
-        },
-      },
-    },
-  });
-}
 
 function renderAnalysis(analysis) {
   if (!analysis) {
-    $("mTotal").textContent = "—.—";
-    $("mLfi").textContent = "—.—";
-    $("mDom").textContent = "—";
-    $("mDomSub").textContent = "oktávové pásmo";
+    setAllText(".js-m-total", "—.—");
+    setAllText(".js-m-lfi", "—.—");
+    setAllText(".js-m-dom", "—");
+    setAllText(".js-m-total-unit", "dB · bez A-vážení");
+    setAllText(".js-m-lfi-unit", "dB · 20–200 Hz");
+    setAllText(".js-m-dom-unit", "oktávové pásmo");
     return;
   }
-  $("mTotal").textContent = fmtDb(analysis.leq_total_db);
-  $("mLfi").textContent = fmtDb(analysis.lfi_db);
+  setAllText(".js-m-total", fmtDb(analysis.leq_total_db));
+  setAllText(".js-m-lfi", fmtDb(analysis.lfi_db));
+  setAllText(".js-m-dom", analysis.dominant_label || "—");
+
   const ratio =
     analysis.lfi_ratio != null
       ? ` · ${Math.round(analysis.lfi_ratio * 100)} % energie`
       : "";
   const lfiSrc = analysis.lfi_source === "esp" ? " · ESP filtr" : "";
-  $("mLfi").parentElement.querySelector(".derived-unit").textContent =
-    `dB · 20–200 Hz${ratio}${lfiSrc}`;
+  const lfiUnit = `dB · 20–200 Hz${ratio}${lfiSrc}`;
   const leqSrc =
     analysis.leq_source === "esp" ? "dB · LZeq (ESP)" : "dB · součet pásem";
-  $("mTotal").parentElement.querySelector(".derived-unit").textContent = leqSrc;
-  $("mDom").textContent = analysis.dominant_label || "—";
-  $("mDomSub").textContent =
+  const domUnit =
     analysis.dominant_db != null
       ? `${fmtDb(analysis.dominant_db)} dB · střed ${analysis.dominant_hz} Hz`
       : "oktávové pásmo";
+
+  setAllText(".js-m-total-unit", leqSrc);
+  setAllText(".js-m-lfi-unit", lfiUnit);
+  setAllText(".js-m-dom-unit", domUnit);
+}
+
+function spectrumStats(bands) {
+  const values = (bands || [])
+    .map((b) => Number(b.value))
+    .filter((v) => !Number.isNaN(v));
+  const vmin = values.length ? Math.min(...values) : 20;
+  const vmax = values.length ? Math.max(...values) : 60;
+  const span = Math.max(8, vmax - vmin);
+  return { vmin, vmax, span };
 }
 
 function renderSpectrumBars(bands) {
-  const root = $("spectrumBars");
+  const root = document.querySelector(".js-spectrum-rows");
+  if (!root) return;
   if (!bands || !bands.length) {
     if (!root.dataset.empty) {
       root.dataset.empty = "1";
@@ -714,12 +585,7 @@ function renderSpectrumBars(bands) {
     return;
   }
   delete root.dataset.empty;
-
-  const values = bands.map((b) => Number(b.value)).filter((v) => !Number.isNaN(v));
-  const vmin = values.length ? Math.min(...values) : 20;
-  const vmax = values.length ? Math.max(...values) : 60;
-  const span = Math.max(8, vmax - vmin);
-
+  const { vmin, vmax, span } = spectrumStats(bands);
   root.innerHTML = bands
     .map((b) => {
       const v = Number(b.value);
@@ -750,11 +616,13 @@ async function refreshLatest() {
 
     const live = data.metrics?.laeq_1s;
     if (live) {
-      $("liveLevel").textContent = fmtDb(live.value);
-      setLevelClass($("liveLevel"), live.value);
+      const txt = fmtDb(live.value);
+      document.querySelectorAll(".js-live-level").forEach((el) => {
+        el.textContent = txt;
+        setLevelClass(el, live.value);
+      });
       const age = Math.max(0, Math.round(Date.now() / 1000 - live.ts));
-      $("liveMeta").textContent =
-        age < 5 ? "právě teď" : `naposledy před ${age} s`;
+      setAllText(".js-live-meta", fmtAge(age));
       updateOverLimit(live.value);
     } else {
       updateOverLimit(null);
@@ -768,232 +636,6 @@ async function refreshLatest() {
     $("onlineLabel").textContent = "API nedostupné";
     console.error(err);
   }
-}
-
-/** Svislé čáry na hranicích denního/nočního limitu (ALERT_*), ne astronomická noc. */
-function drawSpectrogramLimitChanges(ctx, w, h, cols, edges) {
-  if (!cols?.length || !edges?.length) return;
-  const tMin = cols[0].t;
-  const tMax = cols[cols.length - 1].t;
-  if (tMax <= tMin) return;
-
-  const toX = (t) => Math.max(0, Math.min(w, ((t - tMin) / (tMax - tMin)) * w));
-
-  ctx.strokeStyle = "#ff2d95";
-  ctx.lineWidth = 2.5;
-  for (const t of edges) {
-    if (t <= tMin || t >= tMax) continue;
-    const x = Math.round(toX(t)) + 0.5;
-    ctx.beginPath();
-    ctx.moveTo(x, 0);
-    ctx.lineTo(x, h);
-    ctx.stroke();
-  }
-}
-
-function drawSpectrogram() {
-  const canvas = $("spectrogram");
-  const wrap = canvas.parentElement;
-  const data = state.spectrogram;
-  if (!data || !data.columns?.length) {
-    const ctx = canvas.getContext("2d");
-    const w = wrap.clientWidth || 600;
-    canvas.width = w * devicePixelRatio;
-    canvas.height = SPEC_HEIGHT * devicePixelRatio;
-    canvas.style.width = `${w}px`;
-    canvas.style.height = `${SPEC_HEIGHT}px`;
-    ctx.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0);
-    ctx.fillStyle = "rgba(255,255,255,0.04)";
-    ctx.fillRect(0, 0, w, SPEC_HEIGHT);
-    ctx.fillStyle = "#a8bab2";
-    ctx.font = "14px Sora, sans-serif";
-    ctx.fillText("Čekám na historii spektra…", 16, Math.round(SPEC_HEIGHT / 2));
-    $("specYLabels").innerHTML = "";
-    $("specXLabels").innerHTML = "";
-    $("specScale").innerHTML = "";
-    return;
-  }
-
-  const cols = data.columns;
-  const nBands = data.labels.length;
-  const w = Math.max(320, wrap.clientWidth || 600);
-  const h = SPEC_HEIGHT;
-  canvas.width = w * devicePixelRatio;
-  canvas.height = h * devicePixelRatio;
-  canvas.style.width = `${w}px`;
-  canvas.style.height = `${h}px`;
-  const ctx = canvas.getContext("2d");
-  ctx.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0);
-
-  const vmin = data.vmin ?? 20;
-  const vmax = Math.max(vmin + 8, data.vmax ?? 60);
-  const span = vmax - vmin;
-  const colW = w / cols.length;
-  const rowH = h / nBands;
-
-  ctx.fillStyle = "#0a1010";
-  ctx.fillRect(0, 0, w, h);
-
-  for (let c = 0; c < cols.length; c++) {
-    const vals = cols[c].v;
-    for (let b = 0; b < nBands; b++) {
-      // low freq at bottom (index 0 → bottom)
-      const row = nBands - 1 - b;
-      const t = (vals[b] - vmin) / span;
-      ctx.fillStyle = dbToColor(t);
-      ctx.fillRect(
-        Math.floor(c * colW),
-        Math.floor(row * rowH),
-        Math.ceil(colW) + 1,
-        Math.ceil(rowH) + 1
-      );
-    }
-  }
-
-  drawSpectrogramLimitChanges(ctx, w, h, cols, data.limit_change_edges || []);
-
-  // hover marker
-  if (state.hoverCol != null) {
-    ctx.strokeStyle = "rgba(232,240,236,0.85)";
-    ctx.lineWidth = 1.5;
-    ctx.beginPath();
-    ctx.moveTo(state.hoverCol * colW + colW / 2, 0);
-    ctx.lineTo(state.hoverCol * colW + colW / 2, h);
-    ctx.stroke();
-  }
-
-  $("specYLabels").innerHTML = [...data.labels]
-    .reverse()
-    .map((lab) => `<span>${lab}</span>`)
-    .join("");
-
-  const xLabels = [];
-  const nTicks = Math.min(6, cols.length);
-  const withDate = Number(data.hours) >= 24;
-  for (let i = 0; i < nTicks; i++) {
-    const idx = Math.round((i / Math.max(1, nTicks - 1)) * (cols.length - 1));
-    const label = fmtAxisTime(cols[idx].t, { withDate });
-    xLabels.push(
-      `<span style="left:${(idx / Math.max(1, cols.length - 1)) * 100}%">${label}</span>`
-    );
-  }
-  $("specXLabels").innerHTML = xLabels.join("");
-
-  $("specScale").innerHTML =
-    `<span>${fmtDb(vmax)}</span><span>dB</span><span>${fmtDb(vmin)}</span>`;
-
-  state._specLayout = { w, h, colW, nBands, vmin, vmax };
-}
-
-function colFromEvent(ev) {
-  const canvas = $("spectrogram");
-  const rect = canvas.getBoundingClientRect();
-  const x = ev.clientX - rect.left;
-  const cols = state.spectrogram?.columns;
-  if (!cols?.length) return null;
-  const idx = Math.max(0, Math.min(cols.length - 1, Math.floor((x / rect.width) * cols.length)));
-  return idx;
-}
-
-async function refreshSpectrogram() {
-  const { hours, start } = selectedSpectrogramRange();
-  const reqId = ++state.spectrogramReqId;
-  try {
-    let url = `/api/v1/spectrum/history?hours=${encodeURIComponent(hours)}&max_columns=480`;
-    if (start != null) {
-      url += `&start=${encodeURIComponent(start)}`;
-    }
-    const data = await fetchJson(url);
-    if (reqId !== state.spectrogramReqId) return;
-    state.spectrogram = data;
-    if (data.note) {
-      $("specNote").textContent = data.note;
-    }
-    // V živém režimu držet input „Od“ synchronní s posouvajícím se oknem.
-    if (state.specLive && data.start != null) {
-      const input = $("specStartInput");
-      if (input) input.value = toDatetimeLocalValue(data.start);
-    }
-    drawSpectrogram();
-    renderOfflineStats(data.offline, data.start, data.end, hours);
-  } catch (err) {
-    if (reqId === state.spectrogramReqId) console.error(err);
-  }
-}
-
-function renderOfflineStats(offline, t0, t1, hours) {
-  const totalEl = $("offlineTotal");
-  const pctEl = $("offlinePct");
-  const countEl = $("offlineCount");
-  const onlineEl = $("offlineOnline");
-  const gapsEl = $("offlineGaps");
-  const hintEl = $("offlineHint");
-  const expandBtn = $("offlineExpandBtn");
-  if (!totalEl) return;
-
-  const expanded = expandBtn?.getAttribute("aria-expanded") === "true";
-  const range =
-    t0 != null && t1 != null
-      ? { t0, t1, hours: hours ?? Number($("specRangeSelect")?.value || 6) }
-      : selectedSpectrogramRange();
-
-  if (!offline) {
-    state.offlineGaps = [];
-    totalEl.textContent = "—";
-    pctEl.textContent = "—";
-    countEl.textContent = "—";
-    onlineEl.textContent = "—";
-    gapsEl.hidden = true;
-    gapsEl.innerHTML = "";
-    if (state.offlineChart) {
-      state.offlineChart.data.datasets[0].data = [];
-    }
-    applyOfflineTimeRange(range.t0, range.t1, range.hours);
-    return;
-  }
-
-  const thr = offline.gap_threshold_s ?? 30;
-  if (hintEl) {
-    hintEl.textContent = `Výpadky v rozsahu spektrogramu · mezera > ${thr} s`;
-  }
-
-  totalEl.textContent = fmtDuration(offline.offline_s);
-  pctEl.textContent = fmtPct(offline.offline_pct);
-  countEl.textContent =
-    offline.gap_count != null ? String(offline.gap_count) : "—";
-  onlineEl.textContent = fmtDuration(offline.online_s);
-
-  const gaps = offline.gaps || [];
-  state.offlineGaps = gaps;
-
-  const winT0 = offline.t0 ?? range.t0;
-  const winT1 = offline.t1 ?? range.t1;
-
-  if (state.offlineChart) {
-    const n = 160;
-    const span = Math.max(1e-6, winT1 - winT0);
-    const samples = [];
-    for (let i = 0; i <= n; i++) {
-      samples.push({ x: (winT0 + (span * i) / n) * 1000, y: 0 });
-    }
-    state.offlineChart.data.datasets[0].data = samples;
-  }
-
-  applyOfflineTimeRange(winT0, winT1, range.hours);
-
-  if (!gaps.length) {
-    gapsEl.innerHTML =
-      `<li class="offline-gaps-empty">V tomto rozsahu nebyly žádné výpadky delší než ${thr} s.</li>`;
-  } else {
-    gapsEl.innerHTML = gaps
-      .map((g) => {
-        const a = fmtAxisTime(g.t0, { withDate: true });
-        const b = fmtAxisTime(g.t1, { withDate: true });
-        return `<li><span class="gap-when">${a} – ${b}</span><span class="gap-dur">${fmtDuration(g.duration_s)}</span></li>`;
-      })
-      .join("");
-  }
-  gapsEl.hidden = !expanded;
 }
 
 /** Hourly ping — keeps met.no cache warm; UI je jen weather timeline. */
@@ -1030,7 +672,7 @@ function layoutChartUnderTimelines() {
   if (!(right > left)) return;
   const padL = `${Math.max(0, left)}px`;
   const plotW = `${right - left}px`;
-  for (const id of ["weatherTimeline", "aircraftTimeline"]) {
+  for (const id of ["weatherTimeline", "aircraftTimeline", "chartContextGuides", "stats"]) {
     const el = $(id);
     if (!el) continue;
     // Šířka = chartArea (ne padding) — left% u absolute slotů musí sedět na plot.
@@ -1039,6 +681,45 @@ function layoutChartUnderTimelines() {
     el.style.paddingLeft = "0";
     el.style.paddingRight = "0";
   }
+  renderChartContextGuides();
+}
+
+function renderChartContextGuides() {
+  const el = $("chartContextGuides");
+  const chart = state.chart;
+  if (!el || !chart?.scales?.x || !chart.chartArea) return;
+  const x = chart.scales.x;
+  const { left, right } = chart.chartArea;
+  const width = right - left;
+  if (!(width > 0)) {
+    el.innerHTML = "";
+    return;
+  }
+  const parts = [];
+  const seen = new Set();
+  const pushPct = (pct) => {
+    if (pct < -1 || pct > 101) return;
+    const key = pct.toFixed(1);
+    if (seen.has(key)) return;
+    seen.add(key);
+    parts.push(`<span class="chart-context-guide" style="left:${pct.toFixed(2)}%"></span>`);
+  };
+
+  // Se spektrogramem: stejné pozice jako vlastní osa pod stripem.
+  if (chartSpecEnabled() && !$("chartSpecStrip")?.hidden) {
+    for (let i = 0; i < 6; i++) pushPct((i / 5) * 100);
+  } else {
+    for (const tick of x.ticks || []) {
+      const ms = tick.value;
+      if (!Number.isFinite(ms)) continue;
+      const px = x.getPixelForValue(ms);
+      pushPct(((px - left) / width) * 100);
+    }
+    if (!parts.length) {
+      for (let i = 0; i < 6; i++) pushPct((i / 5) * 100);
+    }
+  }
+  el.innerHTML = parts.join("");
 }
 
 function layoutWeatherTimeline() {
@@ -1068,10 +749,54 @@ function layoutChartSpecStrip() {
   }
 }
 
+function hideChartTooltip() {
+  const chart = state.chart;
+  if (!chart?.tooltip) return;
+  chart.setActiveElements([]);
+  chart.tooltip.setActiveElements([], { x: 0, y: 0 });
+  chart.update("none");
+}
+
+/** Nejbližší body datasetů k času → stejný tooltip jako při hoveru grafu. */
+function showChartTooltipAt(tsSec) {
+  const chart = state.chart;
+  if (!chart?.tooltip) return;
+  const targetMs = tsSec * 1000;
+  const active = [];
+  let anchor = null;
+  for (let di = 0; di < chart.data.datasets.length; di++) {
+    const ds = chart.data.datasets[di].data;
+    if (!ds?.length) continue;
+    let best = 0;
+    let bestDist = Infinity;
+    for (let i = 0; i < ds.length; i++) {
+      const d = Math.abs(ds[i].x - targetMs);
+      if (d < bestDist) {
+        bestDist = d;
+        best = i;
+      }
+    }
+    const meta = chart.getDatasetMeta(di);
+    if (meta.hidden || !meta.data[best]) continue;
+    active.push({ datasetIndex: di, index: best });
+    if (di === 0) anchor = meta.data[best];
+  }
+  if (!active.length || !anchor) {
+    hideChartTooltip();
+    return;
+  }
+  chart.setActiveElements(active);
+  chart.tooltip.setActiveElements(active, { x: anchor.x, y: anchor.y });
+  chart.update("none");
+}
+
 function hideChartCrosshair() {
+  const hadTooltip = state.hoverTooltip;
   state.hoverTs = null;
+  state.hoverTooltip = false;
   const el = $("chartCrosshair");
   if (el) el.hidden = true;
+  if (hadTooltip) hideChartTooltip();
 }
 
 function timeFromChartClientX(clientX) {
@@ -1085,29 +810,35 @@ function timeFromChartClientX(clientX) {
   return Number.isFinite(ms) ? ms / 1000 : null;
 }
 
-function showChartCrosshair(tsSec) {
+function showChartCrosshair(tsSec, { tooltip } = {}) {
   const el = $("chartCrosshair");
-  const stack = $("chartStack");
+  const wrap = document.querySelector(".chart-wrap");
   const chart = state.chart;
   const canvas = $("chart");
-  if (!el || !stack || !chart?.chartArea || !canvas) return;
+  if (!el || !wrap || !chart?.chartArea || !canvas) return;
   state.hoverTs = tsSec;
-  const stackRect = stack.getBoundingClientRect();
+  if (tooltip === true) state.hoverTooltip = true;
+  const wrapRect = wrap.getBoundingClientRect();
   const canvasRect = canvas.getBoundingClientRect();
   const xPix = chart.scales.x.getPixelForValue(tsSec * 1000);
-  const left = canvasRect.left - stackRect.left + xPix;
-  const top = canvasRect.top - stackRect.top + chart.chartArea.top;
-  let bottom = canvasRect.top - stackRect.top + chart.chartArea.bottom;
+  const left = canvasRect.left - wrapRect.left + xPix;
+  const top = canvasRect.top - wrapRect.top + chart.chartArea.top;
+  let bottom = canvasRect.top - wrapRect.top + chart.chartArea.bottom;
   if (chartSpecEnabled() && !$("chartSpecStrip")?.hidden) {
     const labels = $("chartAxisLabels");
     const endEl = labels && !labels.hidden ? labels : $("chartSpecStrip");
-    if (endEl) bottom = endEl.getBoundingClientRect().bottom - stackRect.top;
+    if (endEl) bottom = endEl.getBoundingClientRect().bottom - wrapRect.top;
+  }
+  const rail = $("chartContextRail");
+  if (rail) {
+    bottom = Math.max(bottom, rail.getBoundingClientRect().bottom - wrapRect.top);
   }
   el.hidden = false;
   el.style.left = `${left}px`;
   el.style.top = `${top}px`;
   el.style.height = `${Math.max(0, bottom - top)}px`;
   el.title = fmtTime(tsSec);
+  if (state.hoverTooltip) showChartTooltipAt(tsSec);
 }
 
 function renderChartAxisLabels() {
@@ -1119,7 +850,7 @@ function renderChartAxisLabels() {
   }
   layoutChartSpecStrip();
   const { t0, t1 } = state.chartRange;
-  const hours = Number($("rangeSelect")?.value || 24);
+  const hours = Number($("rangeSelect")?.value || 6);
   const span = Math.max(1e-6, t1 - t0);
   const n = 6;
   const parts = [];
@@ -1495,7 +1226,7 @@ function bindChartPan() {
     moved = true;
     const span = Math.max(1e-6, originT1 - originT0);
     const dt = -(dx / width) * span;
-    const hours = Number($("rangeSelect")?.value || 24);
+    const hours = Number($("rangeSelect")?.value || 6);
     const now = Date.now() / 1000;
     const earliest = now - CHART_MAX_LOOKBACK_S;
     let t0 = originT0 + dt;
@@ -1554,7 +1285,7 @@ function bind() {
     state.weatherTimeline = [];
     // Při změně délky okna zachovat konec (živě / aktuální t1).
     if (!state.chartLive && state.chartRange.t1 > 0) {
-      const hours = Number($("rangeSelect").value || 24);
+      const hours = Number($("rangeSelect").value || 6);
       const span = hours * 3600;
       const now = Date.now() / 1000;
       let t1 = Math.min(state.chartRange.t1, now);
@@ -1579,29 +1310,6 @@ function bind() {
     refreshHistory();
   });
 
-  $("specRangeSelect")?.addEventListener("change", () => {
-    if (state.specLive) setSpecLive(true);
-    refreshSpectrogram();
-  });
-  $("specStartInput")?.addEventListener("change", () => {
-    setSpecLive(false);
-    refreshSpectrogram();
-  });
-  $("specLiveBtn")?.addEventListener("click", () => {
-    setSpecLive(true);
-    refreshSpectrogram();
-  });
-
-  $("offlineExpandBtn")?.addEventListener("click", () => {
-    const btn = $("offlineExpandBtn");
-    const gapsEl = $("offlineGaps");
-    const open = btn.getAttribute("aria-expanded") !== "true";
-    btn.setAttribute("aria-expanded", open ? "true" : "false");
-    btn.classList.toggle("is-active", open);
-    btn.textContent = open ? "Skrýt" : "Rozšířené";
-    gapsEl.hidden = !open;
-  });
-
   const aircraftRow = $("aircraftTimeline");
   aircraftRow?.addEventListener("click", (ev) => {
     const btn = ev.target.closest?.(".aircraft-slot");
@@ -1610,6 +1318,20 @@ function bind() {
     const id = Number(btn.getAttribute("data-aircraft-id"));
     const item = (state.aircraftOverflights || []).find((a) => a.id === id);
     if (item) openAircraftPopup(item, btn);
+  });
+  aircraftRow?.addEventListener("pointerover", (ev) => {
+    const btn = ev.target.closest?.(".aircraft-slot");
+    if (!btn || !aircraftRow.contains(btn)) return;
+    const id = Number(btn.getAttribute("data-aircraft-id"));
+    const item = (state.aircraftOverflights || []).find((a) => a.id === id);
+    if (item) showChartCrosshair(item.t, { tooltip: true });
+  });
+  aircraftRow?.addEventListener("pointerout", (ev) => {
+    const btn = ev.target.closest?.(".aircraft-slot");
+    if (!btn || !aircraftRow.contains(btn)) return;
+    const related = ev.relatedTarget;
+    if (related && (btn.contains(related) || related.closest?.(".aircraft-slot"))) return;
+    hideChartCrosshair();
   });
   document.addEventListener("keydown", (ev) => {
     if (ev.key === "Escape") closeAircraftPopup();
@@ -1622,32 +1344,7 @@ function bind() {
     closeAircraftPopup();
   });
 
-  const canvas = $("spectrogram");
-  canvas.addEventListener("mousemove", (ev) => {
-    const idx = colFromEvent(ev);
-    if (idx === state.hoverCol) return;
-    state.hoverCol = idx;
-    const cursor = $("specCursor");
-    if (idx == null || !state.spectrogram?.columns?.length) {
-      cursor.hidden = true;
-      return;
-    }
-    const rect = canvas.getBoundingClientRect();
-    const colW = rect.width / state.spectrogram.columns.length;
-    cursor.hidden = false;
-    cursor.style.left = `${idx * colW + colW / 2}px`;
-    const col = state.spectrogram.columns[idx];
-    cursor.title = fmtTime(col.t);
-    drawSpectrogram();
-  });
-  canvas.addEventListener("mouseleave", () => {
-    state.hoverCol = null;
-    $("specCursor").hidden = true;
-    drawSpectrogram();
-  });
-
   window.addEventListener("resize", () => {
-    drawSpectrogram();
     drawChartSpectrogram();
     renderChartAxisLabels();
     layoutChartSpecStrip();
@@ -1662,19 +1359,13 @@ function bind() {
 }
 
 initChart();
-initOfflineChart();
 bind();
 setChartLive(true);
-setSpecLive(true);
 refreshLatest();
 refreshHistory();
-refreshSpectrogram();
 refreshWeather();
 scheduleWeatherRefresh();
 setInterval(refreshLatest, 2000);
 setInterval(() => {
   if (state.chartLive && !state.chartPanning) refreshHistory();
 }, 15000);
-setInterval(() => {
-  if (state.specLive) refreshSpectrogram();
-}, 30000);

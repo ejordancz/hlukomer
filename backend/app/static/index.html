@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,700&family=IBM+Plex+Mono:wght@400;500&family=Sora:wght@400;500;600&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/static/style.css?v=41" />
+  <link rel="stylesheet" href="/static/style.css?v=46" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@mdi/font@7.4.47/css/materialdesignicons.min.css" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.9/dist/chart.umd.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
@@ -36,193 +36,119 @@
   </header>
 
   <main>
-    <section class="hero-row" aria-label="Aktuální hladina a spektrum">
-      <section class="hero-level" aria-live="polite">
-        <p class="label">Aktuální LAeq (1 s)</p>
-        <p class="level" id="liveLevel">—.—</p>
-        <p class="unit">dBA</p>
-        <p class="meta" id="liveMeta">čekám na data z ESP32…</p>
-      </section>
-
-      <section class="fft-section" aria-label="Spektrum">
-        <div class="spectrum-bars" id="spectrumBars"></div>
-      </section>
-    </section>
-
-    <section class="derived" aria-label="Analýza spektra">
-      <div class="derived-card">
-        <span class="derived-label" id="mOverLimitLabel">Od limitu</span>
-        <strong class="derived-value" id="mOverLimit">—.—</strong>
-        <span class="derived-unit" id="mOverLimitSub">dB vs limit</span>
-        <span class="derived-hint">O kolik dB živý LAeq (1 s) překračuje nebo je pod denním/nočním limitem.</span>
-      </div>
-      <div class="derived-card">
-        <span class="derived-label">Celková hladina</span>
-        <strong class="derived-value" id="mTotal">—.—</strong>
-        <span class="derived-unit">dB · bez A-vážení</span>
-        <span class="derived-hint">Součet celého spektra včetně basů; A-filtr ucha basy potlačuje, proto bývá vyšší než LAeq.</span>
-      </div>
-      <div class="derived-card">
-        <span class="derived-label">Index basů (LFI)</span>
-        <strong class="derived-value" id="mLfi">—.—</strong>
-        <span class="derived-unit">dB · 20–200 Hz</span>
-        <span class="derived-hint">Síla basů (20–200 Hz). Typické pro VZT, ventilátory a dunění z ulice.</span>
-      </div>
-      <div class="derived-card">
-        <span class="derived-label">Dominantní frekvence</span>
-        <strong class="derived-value" id="mDom">—</strong>
-        <span class="derived-unit" id="mDomSub">oktávové pásmo</span>
-        <span class="derived-hint">Pásmo s nejsilnějším tónem právě teď — u VZT často 50/63 Hz (motor) nebo ~250 Hz (hluk vzduchu).</span>
-      </div>
-    </section>
-
-    <section class="controls chart-controls">
-      <label>
-        Rozsah grafu
-        <select id="rangeSelect">
-          <option value="0.1667">10 minut</option>
-          <option value="1">1 hodina</option>
-          <option value="6">6 hodin</option>
-          <option value="24" selected>24 hodin</option>
-          <option value="168">7 dní</option>
-          <option value="720">30 dní</option>
-        </select>
-      </label>
-      <label>
-        Metrika
-        <select id="metricSelect">
-          <option value="laeq_1s">LAeq 1s (živě)</option>
-          <option value="laeq_1min" selected>LAeq 1min</option>
-          <option value="lamax_1min">LAmax 1min</option>
-          <option value="lamin_1min">LAmin 1min</option>
-        </select>
-      </label>
-      <button type="button" class="ghost-btn is-active" id="chartLiveBtn" aria-pressed="true" title="Vrátit graf k aktuálnímu času">
-        Živě
-      </button>
-    </section>
-
-    <section class="chart-wrap">
-      <div class="chart-legend" aria-hidden="true">
-        <span class="chart-legend-item"><span class="swatch day"></span>den</span>
-        <span class="chart-legend-item"><span class="swatch night"></span>noc</span>
-        <span class="chart-legend-item"><span class="swatch limit"></span>limit</span>
-        <span class="chart-legend-item"><span class="swatch aircraft" aria-hidden="true"><span class="mdi mdi-airplane"></span></span>přelet</span>
-      </div>
-      <div class="chart-stack" id="chartStack">
-        <canvas id="chart" height="120"></canvas>
-        <div class="chart-spec-strip" id="chartSpecStrip" hidden>
-          <div class="chart-spec-y" id="chartSpecYLabels" aria-hidden="true"></div>
-          <div class="chart-spec-canvas-wrap" id="chartSpecCanvasWrap">
-            <canvas id="chartSpectrogram" height="288" role="img" aria-label="Spektrogram pod grafem"></canvas>
+    <section class="live-stage" aria-label="Aktuální hladina a spektrum">
+      <section class="live-b" aria-live="polite">
+        <div class="live-b-left">
+          <p class="label">Aktuální LAeq (1 s)</p>
+          <p class="level js-live-level">—.—</p>
+          <p class="unit">dBA</p>
+          <p class="meta js-live-meta">čekám na data z ESP32…</p>
+          <div class="live-b-metrics">
+            <div class="live-b-metric">
+              <span class="derived-label js-over-label">Od limitu</span>
+              <strong class="derived-value js-over-value">—.—</strong>
+              <span class="derived-unit js-over-sub">dB vs limit</span>
+            </div>
+            <div class="live-b-metric">
+              <span class="derived-label">Celková hladina</span>
+              <strong class="derived-value js-m-total">—.—</strong>
+              <span class="derived-unit js-m-total-unit">dB · bez A-vážení</span>
+            </div>
+            <div class="live-b-metric">
+              <span class="derived-label">Index basů (LFI)</span>
+              <strong class="derived-value js-m-lfi">—.—</strong>
+              <span class="derived-unit js-m-lfi-unit">dB · 20–200 Hz</span>
+            </div>
+            <div class="live-b-metric">
+              <span class="derived-label">Dominantní frekvence</span>
+              <strong class="derived-value js-m-dom">—</strong>
+              <span class="derived-unit js-m-dom-unit">oktávové pásmo</span>
+            </div>
           </div>
         </div>
-        <div class="chart-axis-labels" id="chartAxisLabels" hidden aria-hidden="true"></div>
-        <div class="chart-crosshair" id="chartCrosshair" hidden></div>
-      </div>
-      <div id="aircraftPopup" class="aircraft-popup" hidden role="dialog" aria-modal="false" aria-label="Detail přeletu"></div>
-      <div class="chart-under">
-        <div class="aircraft-timeline" id="aircraftTimeline" aria-label="Přelety podél grafu"></div>
-        <div class="weather-timeline" id="weatherTimeline" aria-label="Počasí podél grafu" aria-live="polite"></div>
-      </div>
+        <div class="live-b-right">
+          <div class="spectrum-bars js-spectrum-rows" aria-label="Spektrum"></div>
+        </div>
+      </section>
     </section>
 
-    <section class="stats" id="stats">
-      <div class="stat">
-        <span class="stat-label">Průměr</span>
-        <span class="stat-value" id="statAvg">—</span>
-      </div>
-      <div class="stat">
-        <span class="stat-label">Minimum</span>
-        <span class="stat-value" id="statMin">—</span>
-      </div>
-      <div class="stat">
-        <span class="stat-label">Maximum</span>
-        <span class="stat-value" id="statMax">—</span>
-      </div>
-      <div class="stat">
-        <span class="stat-label">Nad limitem</span>
-        <span class="stat-value" id="statAbove">—</span>
-      </div>
-    </section>
+    <section class="history" aria-label="Historie měření">
+      <header class="history-head">
+        <p class="section-kicker">Historie</p>
+        <p class="history-lede">Průběh hladiny ve zvoleném časovém okně.</p>
+      </header>
 
-    <section class="spectrogram-section" aria-label="Spektrogram">
-      <div class="spectrum-head">
-        <div>
-          <h2>Spektrogram</h2>
-          <p class="spectrum-hint">Heatmapa · 1/3-oktáva v basu (trvalá čára = tón)</p>
-        </div>
-        <div class="chart-legend" aria-hidden="true">
-          <span class="chart-legend-item"><span class="swatch limit-change"></span>změna limitu</span>
-        </div>
-      </div>
-      <div class="controls spectrogram-controls">
+      <section class="controls chart-controls">
         <label>
-          Rozsah
-          <select id="specRangeSelect">
+          Rozsah grafu
+          <select id="rangeSelect">
             <option value="0.1667">10 minut</option>
             <option value="1">1 hodina</option>
             <option value="6" selected>6 hodin</option>
             <option value="24">24 hodin</option>
+            <option value="168">7 dní</option>
+            <option value="720">30 dní</option>
           </select>
         </label>
         <label>
-          Od
-          <input type="datetime-local" id="specStartInput" step="60" />
+          Metrika
+          <select id="metricSelect">
+            <option value="laeq_1s">LAeq 1s (živě)</option>
+            <option value="laeq_1min" selected>LAeq 1min</option>
+            <option value="lamax_1min">LAmax 1min</option>
+            <option value="lamin_1min">LAmin 1min</option>
+          </select>
         </label>
-        <button type="button" class="ghost-btn is-active" id="specLiveBtn" aria-pressed="true">
+        <button type="button" class="ghost-btn is-active" id="chartLiveBtn" aria-pressed="true" title="Vrátit graf k aktuálnímu času">
           Živě
         </button>
-      </div>
-      <div class="spectrogram-wrap">
-        <div class="spectrogram-y" id="specYLabels" aria-hidden="true"></div>
-        <div class="spectrogram-canvas-wrap">
-          <canvas id="spectrogram" width="900" height="280" role="img" aria-label="Spektrogram"></canvas>
-          <div class="spectrogram-cursor" id="specCursor" hidden></div>
+      </section>
+
+      <section class="chart-wrap">
+        <div class="chart-legend" aria-hidden="true">
+          <span class="chart-legend-item"><span class="swatch day"></span>den</span>
+          <span class="chart-legend-item"><span class="swatch night"></span>noc</span>
+          <span class="chart-legend-item"><span class="swatch limit"></span>limit</span>
+          <span class="chart-legend-item"><span class="swatch aircraft" aria-hidden="true"><span class="mdi mdi-airplane"></span></span>přelet</span>
         </div>
-        <div class="spectrogram-scale" id="specScale" aria-hidden="true"></div>
-      </div>
-      <div class="spectrogram-x" id="specXLabels"></div>
-      <p class="spectrogram-note" id="specNote">
-        Trvalá vodorovná čára (např. 250 Hz nebo 50/63 Hz) = stálý tón VZT/ventilátoru; zesílení večer je na heatmapě vidět lépe než z jedné hodnoty dB.
-      </p>
-      <div class="offline-stats" id="offlineStats" aria-label="Offline statistika">
-        <div class="spectrum-head">
-          <div>
-            <h3 class="offline-title">Bez dat (offline)</h3>
-            <p class="spectrum-hint" id="offlineHint">Výpadky v rozsahu spektrogramu</p>
+        <div class="chart-stack" id="chartStack">
+          <canvas id="chart" height="120"></canvas>
+          <div class="chart-spec-strip" id="chartSpecStrip" hidden>
+            <div class="chart-spec-y" id="chartSpecYLabels" aria-hidden="true"></div>
+            <div class="chart-spec-canvas-wrap" id="chartSpecCanvasWrap">
+              <canvas id="chartSpectrogram" height="288" role="img" aria-label="Spektrogram pod grafem"></canvas>
+            </div>
           </div>
-          <button type="button" class="ghost-btn" id="offlineExpandBtn" aria-expanded="false">
-            Rozšířené
-          </button>
+          <div class="chart-axis-labels" id="chartAxisLabels" hidden aria-hidden="true"></div>
         </div>
-        <div class="offline-chart-wrap">
-          <canvas id="offlineChart" height="12" role="img" aria-label="Časová osa výpadků"></canvas>
-        </div>
-        <div class="chart-legend offline-legend" aria-hidden="true">
-          <span class="chart-legend-item"><span class="swatch offline-online"></span>data</span>
-          <span class="chart-legend-item"><span class="swatch offline-gap"></span>bez dat</span>
-        </div>
-        <div class="stats offline-stats-grid">
-          <div class="stat">
-            <span class="stat-label">Celkem offline</span>
-            <span class="stat-value" id="offlineTotal">—</span>
+        <div id="aircraftPopup" class="aircraft-popup" hidden role="dialog" aria-modal="false" aria-label="Detail přeletu"></div>
+        <div class="chart-context" id="chartContext">
+          <div class="chart-context-rail" id="chartContextRail">
+            <div class="chart-context-guides" id="chartContextGuides" aria-hidden="true"></div>
+            <div class="aircraft-timeline" id="aircraftTimeline" aria-label="Přelety podél grafu"></div>
+            <div class="weather-timeline" id="weatherTimeline" aria-label="Počasí podél grafu" aria-live="polite"></div>
           </div>
-          <div class="stat">
-            <span class="stat-label">Podíl rozsahu</span>
-            <span class="stat-value" id="offlinePct">—</span>
-          </div>
-          <div class="stat">
-            <span class="stat-label">Počet výpadků</span>
-            <span class="stat-value" id="offlineCount">—</span>
-          </div>
-          <div class="stat">
-            <span class="stat-label">Online</span>
-            <span class="stat-value" id="offlineOnline">—</span>
+          <div class="stats" id="stats" aria-label="Souhrn viditelného rozsahu">
+            <div class="stat">
+              <span class="stat-label">Průměr</span>
+              <span class="stat-value" id="statAvg">—</span>
+            </div>
+            <div class="stat">
+              <span class="stat-label">Minimum</span>
+              <span class="stat-value" id="statMin">—</span>
+            </div>
+            <div class="stat">
+              <span class="stat-label">Maximum</span>
+              <span class="stat-value" id="statMax">—</span>
+            </div>
+            <div class="stat">
+              <span class="stat-label">Nad limitem</span>
+              <span class="stat-value" id="statAbove">—</span>
+            </div>
           </div>
         </div>
-        <ul class="offline-gaps" id="offlineGaps" hidden></ul>
-      </div>
+        <div class="chart-crosshair" id="chartCrosshair" hidden></div>
+      </section>
     </section>
   </main>
 
@@ -246,6 +172,6 @@
     </div>
   </footer>
 
-  <script src="/static/app.js?v=37"></script>
+  <script src="/static/app.js?v=41"></script>
 </body>
 </html>
