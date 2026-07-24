@@ -27,6 +27,10 @@ from starlette.background import BackgroundTask
 from . import aircraft as aircraft_svc
 from . import weather as weather_svc
 
+import logging
+
+logger = logging.getLogger("hlukomer")
+
 DATA_DIR = Path(os.getenv("DATA_DIR", "/data"))
 DB_PATH = DATA_DIR / "hlukomer.db"
 INGEST_API_KEY = os.getenv("INGEST_API_KEY", "changeme")
@@ -495,6 +499,9 @@ def ensure_db() -> None:
                 icao24 TEXT NOT NULL,
                 callsign TEXT,
                 origin_country TEXT,
+                aircraft_type TEXT,
+                origin_airport TEXT,
+                destination_airport TEXT,
                 first_seen_ts REAL NOT NULL,
                 last_seen_ts REAL NOT NULL,
                 closest_ts REAL NOT NULL,
@@ -513,6 +520,27 @@ def ensure_db() -> None:
                 ON aircraft_overflights(icao24, last_seen_ts);
             """
         )
+        _migrate_aircraft_columns(conn)
+
+
+def _migrate_aircraft_columns(conn: sqlite3.Connection) -> None:
+    """Doplní enrichment sloupce u starší DB (CREATE IF NOT EXISTS je nestačí)."""
+    try:
+        cols = {
+            str(r[1])
+            for r in conn.execute("PRAGMA table_info(aircraft_overflights)").fetchall()
+        }
+    except sqlite3.OperationalError:
+        return
+    for col, typedef in (
+        ("aircraft_type", "TEXT"),
+        ("origin_airport", "TEXT"),
+        ("destination_airport", "TEXT"),
+    ):
+        if col not in cols:
+            conn.execute(
+                f"ALTER TABLE aircraft_overflights ADD COLUMN {col} {typedef}"
+            )
 
 
 @contextmanager
@@ -626,6 +654,7 @@ def on_startup() -> None:
     weather_svc.start_hourly_refresh()
     aircraft_svc.set_persist_callback(persist_aircraft_sightings)
     aircraft_svc.start_aircraft_poll()
+    _start_aircraft_enrichment_backfill()
 
 
 def prune_old() -> None:
@@ -701,11 +730,14 @@ def persist_aircraft_sightings(sightings: list[aircraft_svc.Sighting]) -> None:
         return
     gap_s = aircraft_svc.get_config().gap_s
     now = utc_now()
+    enrich_ids: list[tuple[int, str, float]] = []
     with db() as conn:
         for s in sightings:
             open_row = conn.execute(
                 """
-                SELECT id, closest_distance_m FROM aircraft_overflights
+                SELECT id, closest_distance_m,
+                       aircraft_type, origin_airport, destination_airport
+                FROM aircraft_overflights
                 WHERE icao24 = ? AND (? - last_seen_ts) <= ?
                 ORDER BY last_seen_ts DESC
                 LIMIT 1
@@ -765,8 +797,15 @@ def persist_aircraft_sightings(sightings: list[aircraft_svc.Sighting]) -> None:
                             open_row["id"],
                         ),
                     )
+                # Doplnit enrichment, pokud chybí typ nebo letiště
+                if (
+                    not open_row["aircraft_type"]
+                    or not open_row["origin_airport"]
+                    or not open_row["destination_airport"]
+                ):
+                    enrich_ids.append((int(open_row["id"]), s.icao24, float(s.ts)))
             else:
-                conn.execute(
+                cur = conn.execute(
                     """
                     INSERT INTO aircraft_overflights (
                         icao24, callsign, origin_country,
@@ -794,6 +833,33 @@ def persist_aircraft_sightings(sightings: list[aircraft_svc.Sighting]) -> None:
                         now,
                     ),
                 )
+                enrich_ids.append((int(cur.lastrowid), s.icao24, float(s.ts)))
+
+    # HTTP enrichment mimo DB transakci (cache v aircraft.py)
+    for row_id, icao24, ts in enrich_ids:
+        try:
+            meta = aircraft_svc.enrich_aircraft(icao24, ts)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("Aircraft enrich %s: %s", icao24, exc)
+            continue
+        with db() as conn:
+            conn.execute(
+                """
+                UPDATE aircraft_overflights SET
+                    aircraft_type = COALESCE(aircraft_type, ?),
+                    origin_airport = COALESCE(?, origin_airport),
+                    destination_airport = COALESCE(?, destination_airport),
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    meta.aircraft_type or "",
+                    meta.origin_airport,
+                    meta.destination_airport,
+                    utc_now(),
+                    row_id,
+                ),
+            )
 
 
 AIRCRAFT_HISTORY_CAP = 500
@@ -808,6 +874,7 @@ def fetch_aircraft_overflights(t0: float, t1: float) -> list[dict[str, Any]]:
                 """
                 SELECT
                     id, icao24, callsign, origin_country,
+                    aircraft_type, origin_airport, destination_airport,
                     closest_ts, closest_distance_m, closest_altitude_m,
                     closest_velocity_ms, closest_track_deg, closest_vertical_rate_ms,
                     first_seen_ts, last_seen_ts
@@ -822,10 +889,9 @@ def fetch_aircraft_overflights(t0: float, t1: float) -> list[dict[str, Any]]:
     try:
         rows = _query()
     except sqlite3.OperationalError:
-        # Obnovená / ručně zkopírovaná stará DB bez tabulky
+        # Obnovená / ručně zkopírovaná stará DB bez tabulky / sloupců
         ensure_db()
         rows = _query()
-    # Pro UI chronologicky
     items = [
         {
             "id": r["id"],
@@ -833,6 +899,9 @@ def fetch_aircraft_overflights(t0: float, t1: float) -> list[dict[str, Any]]:
             "icao24": r["icao24"],
             "callsign": r["callsign"],
             "origin_country": r["origin_country"],
+            "aircraft_type": r["aircraft_type"] or None,
+            "origin_airport": r["origin_airport"] or None,
+            "destination_airport": r["destination_airport"] or None,
             "distance_m": r["closest_distance_m"],
             "altitude_m": r["closest_altitude_m"],
             "velocity_ms": r["closest_velocity_ms"],
@@ -845,6 +914,79 @@ def fetch_aircraft_overflights(t0: float, t1: float) -> list[dict[str, Any]]:
     ]
     items.sort(key=lambda x: x["t"])
     return items
+
+
+def backfill_aircraft_enrichment(limit: int = 40) -> int:
+    """Doplní typ/letiště u starších přeletů bez blockování history API."""
+    try:
+        with db() as conn:
+            rows = conn.execute(
+                """
+                SELECT id, icao24, closest_ts
+                FROM aircraft_overflights
+                WHERE aircraft_type IS NULL
+                ORDER BY closest_ts DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+    except sqlite3.OperationalError:
+        return 0
+
+    done = 0
+    for r in rows:
+        try:
+            meta = aircraft_svc.enrich_aircraft(str(r["icao24"]), float(r["closest_ts"]))
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("Aircraft backfill %s: %s", r["icao24"], exc)
+            # Označit typ jako „zkoušeno“, ať backfill necyklí
+            with db() as conn:
+                conn.execute(
+                    """
+                    UPDATE aircraft_overflights SET
+                        aircraft_type = COALESCE(aircraft_type, ''),
+                        updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (utc_now(), r["id"]),
+                )
+            continue
+        with db() as conn:
+            conn.execute(
+                """
+                UPDATE aircraft_overflights SET
+                    aircraft_type = COALESCE(aircraft_type, ?),
+                    origin_airport = COALESCE(?, origin_airport),
+                    destination_airport = COALESCE(?, destination_airport),
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    meta.aircraft_type or "",
+                    meta.origin_airport,
+                    meta.destination_airport,
+                    utc_now(),
+                    r["id"],
+                ),
+            )
+        done += 1
+    return done
+
+
+def _start_aircraft_enrichment_backfill() -> None:
+    import threading
+
+    def run() -> None:
+        try:
+            n = backfill_aircraft_enrichment()
+            if n:
+                logger.info("Aircraft enrichment backfill: %d záznamů", n)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Aircraft enrichment backfill: %s", exc)
+
+    threading.Thread(
+        target=run, name="aircraft-enrich-backfill", daemon=True
+    ).start()
 
 
 def weather_step_seconds(hours: float) -> float:
@@ -1141,20 +1283,42 @@ def latest(device_id: str = Query(default="hlukomer")) -> dict[str, Any]:
 @app.get("/api/v1/spectrum/history")
 def spectrum_history(
     hours: float = Query(default=6, ge=0.1, le=24 * 90),
+    start: float | None = Query(
+        default=None,
+        description="Unix začátek okna; bez něj končí okno na teď (živě).",
+    ),
     device_id: str = Query(default="hlukomer"),
     max_columns: int = Query(default=360, ge=10, le=2000),
 ) -> dict[str, Any]:
-    """Heatmapa spektra v čase — sloupce = okamžiky, řádky = frekvenční pásma."""
-    since = utc_now() - hours * 3600
+    """Heatmapa spektra v čase — sloupce = okamžiky, řádky = frekvenční pásma.
+
+    Okno je [start, start+hours]. Bez `start` je start = now − hours (živý konec).
+    """
+    now = utc_now()
+    span = hours * 3600
+    if start is None:
+        t_end = now
+        t_start = t_end - span
+    else:
+        t_start = float(start)
+        t_end = t_start + span
+        if t_start >= now:
+            raise HTTPException(status_code=400, detail="start must be in the past")
+        if t_end > now:
+            t_end = now
+        if t_end <= t_start:
+            raise HTTPException(status_code=400, detail="empty time window")
+
     placeholders = ",".join("?" * len(SPECTRUM_METRICS))
     with db() as conn:
         rows = conn.execute(
             f"""
             SELECT ts, metric, value FROM measurements
-            WHERE device_id = ? AND metric IN ({placeholders}) AND ts >= ?
+            WHERE device_id = ? AND metric IN ({placeholders})
+              AND ts >= ? AND ts <= ?
             ORDER BY ts ASC
             """,
-            (device_id, *SPECTRUM_METRICS, since),
+            (device_id, *SPECTRUM_METRICS, t_start, t_end),
         ).fetchall()
     columns, vmin, vmax = pivot_spectrum_rows(rows, max_columns, SPECTRUM_METRICS)
     bands = list(SPECTRUM_BANDS)
@@ -1168,10 +1332,11 @@ def spectrum_history(
             leg_rows = conn.execute(
                 f"""
                 SELECT ts, metric, value FROM measurements
-                WHERE device_id = ? AND metric IN ({leg_ph}) AND ts >= ?
+                WHERE device_id = ? AND metric IN ({leg_ph})
+                  AND ts >= ? AND ts <= ?
                 ORDER BY ts ASC
                 """,
-                (device_id, *LEGACY_SPECTRUM_METRICS, since),
+                (device_id, *LEGACY_SPECTRUM_METRICS, t_start, t_end),
             ).fetchall()
         columns, vmin, vmax = pivot_spectrum_rows(
             leg_rows, max_columns, LEGACY_SPECTRUM_METRICS
@@ -1192,15 +1357,14 @@ def spectrum_history(
             ]
             hz = [31.5, 63.0, 125.0, 250.0, 500.0, 1000.0, 2000.0, 4000.0, 8000.0, 16000.0]
             note = "Legacy 10 oktáv (starý firmware). Po flashi ESP uvidíš 1/3-oktávu v basu."
-    t0 = columns[0]["t"] if columns else since
-    t1 = columns[-1]["t"] if columns else utc_now()
-    now = utc_now()
     with db() as conn:
-        offline = fetch_offline_stats(conn, device_id, since, now)
-    night_bands, sun_source = build_night_bands(t0, t1)
+        offline = fetch_offline_stats(conn, device_id, t_start, t_end)
+    night_bands, sun_source = build_night_bands(t_start, t_end)
     return {
         "device_id": device_id,
         "hours": hours,
+        "start": round(t_start, 3),
+        "end": round(t_end, 3),
         "bands": bands,
         "labels": labels,
         "hz": hz,
@@ -1208,7 +1372,7 @@ def spectrum_history(
         "vmin": round(vmin, 1) if vmin is not None else None,
         "vmax": round(vmax, 1) if vmax is not None else None,
         "night_bands": night_bands,
-        "limit_change_edges": build_limit_change_edges(t0, t1),
+        "limit_change_edges": build_limit_change_edges(t_start, t_end),
         "sun": {"source": sun_source},
         "offline": offline,
         "note": note,
@@ -1232,22 +1396,41 @@ def spectrum_at(
 def history(
     metric: str = Query(default="laeq_1s"),
     hours: float = Query(default=24, ge=0.1, le=24 * 90),
+    start: float | None = Query(
+        default=None,
+        description="Unix začátek okna; bez něj končí okno na teď (živě).",
+    ),
     device_id: str = Query(default="hlukomer"),
     max_points: int = Query(default=2000, ge=50, le=10000),
 ) -> dict[str, Any]:
+    """Okno je [start, start+hours]. Bez `start` je start = now − hours (živý konec)."""
     allowed = {"laeq_1s", "laeq_1min", "lamax_1min", "lamin_1min"}
     if metric not in allowed:
         raise HTTPException(status_code=400, detail=f"metric must be one of {sorted(allowed)}")
 
-    since = utc_now() - hours * 3600
+    now = utc_now()
+    span = hours * 3600
+    if start is None:
+        t_end = now
+        t_start = t_end - span
+    else:
+        t_start = float(start)
+        t_end = t_start + span
+        if t_start >= now:
+            raise HTTPException(status_code=400, detail="start must be in the past")
+        if t_end > now:
+            t_end = now
+        if t_end <= t_start:
+            raise HTTPException(status_code=400, detail="empty time window")
+
     with db() as conn:
         rows = conn.execute(
             """
             SELECT ts, value FROM measurements
-            WHERE device_id = ? AND metric = ? AND ts >= ?
+            WHERE device_id = ? AND metric = ? AND ts >= ? AND ts <= ?
             ORDER BY ts ASC
             """,
-            (device_id, metric, since),
+            (device_id, metric, t_start, t_end),
         ).fetchall()
 
     points = [{"t": r["ts"], "v": r["value"]} for r in rows]
@@ -1266,24 +1449,23 @@ def history(
             "above_threshold_pct": 100.0 * above / len(values),
         }
 
-    t0 = points[0]["t"] if points else since
-    t1 = points[-1]["t"] if points else utc_now()
     meta = threshold_meta()
-    night_bands, sun_source = build_night_bands(t0, t1)
-    now = utc_now()
+    night_bands, sun_source = build_night_bands(t_start, t_end)
     ac_cfg = aircraft_svc.get_config()
     return {
         "metric": metric,
         "device_id": device_id,
         "hours": hours,
+        "start": round(t_start, 3),
+        "end": round(t_end, 3),
         "threshold_dba": meta["alert_threshold_dba"],
         "alert_period": meta["alert_period"],
         "thresholds": meta["thresholds"],
-        "threshold_points": build_threshold_line(t0, t1),
+        "threshold_points": build_threshold_line(t_start, t_end),
         "night_bands": night_bands,
         "sun": {"source": sun_source},
-        "weather_timeline": fetch_weather_timeline(since, now, hours),
-        "aircraft_overflights": fetch_aircraft_overflights(since, now),
+        "weather_timeline": fetch_weather_timeline(t_start, t_end, hours),
+        "aircraft_overflights": fetch_aircraft_overflights(t_start, t_end),
         "aircraft": {
             "enabled": ac_cfg.enabled,
             "source": "opensky",

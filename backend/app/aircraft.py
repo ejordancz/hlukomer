@@ -19,6 +19,8 @@ from . import weather as weather_svc
 logger = logging.getLogger("hlukomer.aircraft")
 
 STATES_URL = "https://opensky-network.org/api/states/all"
+FLIGHTS_URL = "https://opensky-network.org/api/flights/aircraft"
+HEXDB_AIRCRAFT_URL = "https://hexdb.io/api/v1/aircraft/{icao24}"
 TOKEN_URL = (
     "https://auth.opensky-network.org/auth/realms/opensky-network"
     "/protocol/openid-connect/token"
@@ -79,6 +81,15 @@ _status: dict[str, Any] = {
     "last_error": None,
     "last_sightings": 0,
 }
+
+# icao24 → typ letadla (None = už jsme zkoušeli a nic)
+_type_cache: dict[str, Optional[str]] = {}
+_type_lock = threading.Lock()
+# icao24 → (fetched_at, origin, destination); negativní cache krátká
+_route_cache: dict[str, tuple[float, Optional[str], Optional[str]]] = {}
+_route_lock = threading.Lock()
+_ROUTE_CACHE_TTL_S = 1800.0
+_ROUTE_NEG_TTL_S = 300.0
 
 
 def _env_float(name: str, default: float) -> float:
@@ -304,6 +315,138 @@ def fetch_states(cfg: AircraftConfig) -> tuple[Optional[int], list[list[Any]]]:
     except (TypeError, ValueError):
         api_ts = None
     return api_ts, states
+
+
+def _auth_headers(cfg: AircraftConfig) -> dict[str, str]:
+    headers = {"Accept": "application/json", "User-Agent": weather_svc.user_agent()}
+    token = _obtain_token(cfg)
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    return headers
+
+
+def fetch_aircraft_type(icao24: str) -> Optional[str]:
+    """Typ letadla z hexdb (cache na procesu)."""
+    key = icao24.lower().strip()
+    if not key:
+        return None
+    with _type_lock:
+        if key in _type_cache:
+            return _type_cache[key]
+
+    url = HEXDB_AIRCRAFT_URL.format(icao24=key)
+    headers = {"Accept": "application/json", "User-Agent": weather_svc.user_agent()}
+    label: Optional[str] = None
+    try:
+        req = urllib.request.Request(url, headers=headers, method="GET")
+        with urllib.request.urlopen(req, timeout=12) as resp:
+            payload = json.loads(resp.read().decode() or "{}")
+        if isinstance(payload, dict):
+            typ = _as_str(payload.get("Type"))
+            code = _as_str(payload.get("ICAOTypeCode"))
+            if typ and code and typ.upper() != code.upper():
+                label = f"{code} · {typ}"
+            else:
+                label = typ or code
+    except urllib.error.HTTPError as exc:
+        if exc.code != 404:
+            logger.debug("hexdb typ %s: HTTP %s", key, exc.code)
+    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, OSError) as exc:
+        logger.debug("hexdb typ %s: %s", key, exc)
+
+    with _type_lock:
+        _type_cache[key] = label
+    return label
+
+
+def fetch_flight_airports(
+    icao24: str, around_ts: float
+) -> tuple[Optional[str], Optional[str]]:
+    """Odhad výchozí/cílové letiště z OpenSky /flights/aircraft."""
+    key = icao24.lower().strip()
+    if not key:
+        return None, None
+
+    now = time.time()
+    with _route_lock:
+        cached = _route_cache.get(key)
+        if cached:
+            fetched_at, origin, dest = cached
+            # Kompletní trasa déle; chybí-li cíl (běžné u probíhajícího letu), zkusit dřív znovu
+            ttl = (
+                _ROUTE_CACHE_TTL_S
+                if (origin and dest)
+                else _ROUTE_NEG_TTL_S
+            )
+            if now - fetched_at < ttl:
+                return origin, dest
+
+    cfg = get_config()
+    # Max 2 dny (limit API); bereme posledních ~24 h kolem sightingu.
+    end = int(min(now + 60, around_ts + 6 * 3600))
+    begin = int(max(0, end - 24 * 3600))
+    query = urllib.parse.urlencode(
+        {"icao24": key, "begin": begin, "end": end}
+    )
+    url = f"{FLIGHTS_URL}?{query}"
+    origin = dest = None
+    try:
+        req = urllib.request.Request(url, headers=_auth_headers(cfg), method="GET")
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            raw = resp.read().decode()
+            flights = json.loads(raw) if raw else []
+        if isinstance(flights, list) and flights:
+            best = None
+            best_score = float("inf")
+            for f in flights:
+                if not isinstance(f, dict):
+                    continue
+                first = _as_float(f.get("firstSeen"))
+                last = _as_float(f.get("lastSeen"))
+                if first is None or last is None:
+                    continue
+                if first <= around_ts <= last:
+                    score = 0.0
+                else:
+                    score = min(abs(around_ts - first), abs(around_ts - last))
+                if score < best_score:
+                    best_score = score
+                    best = f
+            if best is not None:
+                origin = _as_str(best.get("estDepartureAirport"))
+                dest = _as_str(best.get("estArrivalAirport"))
+                if origin:
+                    origin = origin.upper()
+                if dest:
+                    dest = dest.upper()
+    except urllib.error.HTTPError as exc:
+        # 404 = žádný let v intervalu
+        if exc.code not in (404, 400):
+            logger.debug("OpenSky flights %s: HTTP %s", key, exc.code)
+    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, OSError) as exc:
+        logger.debug("OpenSky flights %s: %s", key, exc)
+
+    with _route_lock:
+        _route_cache[key] = (now, origin, dest)
+    return origin, dest
+
+
+@dataclass(frozen=True)
+class AircraftEnrichment:
+    aircraft_type: Optional[str]
+    origin_airport: Optional[str]
+    destination_airport: Optional[str]
+
+
+def enrich_aircraft(icao24: str, around_ts: float) -> AircraftEnrichment:
+    """Doplní typ (hexdb) a letiště (OpenSky flights). Chybějící = None."""
+    typ = fetch_aircraft_type(icao24)
+    origin, dest = fetch_flight_airports(icao24, around_ts)
+    return AircraftEnrichment(
+        aircraft_type=typ,
+        origin_airport=origin,
+        destination_airport=dest,
+    )
 
 
 def parse_sightings(

@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,700&family=IBM+Plex+Mono:wght@400;500&family=Sora:wght@400;500;600&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/static/style.css?v=32" />
+  <link rel="stylesheet" href="/static/style.css?v=41" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@mdi/font@7.4.47/css/materialdesignicons.min.css" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.9/dist/chart.umd.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
@@ -36,11 +36,17 @@
   </header>
 
   <main>
-    <section class="hero-level" aria-live="polite">
-      <p class="label">Aktuální LAeq (1 s)</p>
-      <p class="level" id="liveLevel">—.—</p>
-      <p class="unit">dBA</p>
-      <p class="meta" id="liveMeta">čekám na data z ESP32…</p>
+    <section class="hero-row" aria-label="Aktuální hladina a spektrum">
+      <section class="hero-level" aria-live="polite">
+        <p class="label">Aktuální LAeq (1 s)</p>
+        <p class="level" id="liveLevel">—.—</p>
+        <p class="unit">dBA</p>
+        <p class="meta" id="liveMeta">čekám na data z ESP32…</p>
+      </section>
+
+      <section class="fft-section" aria-label="Spektrum">
+        <div class="spectrum-bars" id="spectrumBars"></div>
+      </section>
     </section>
 
     <section class="derived" aria-label="Analýza spektra">
@@ -70,9 +76,9 @@
       </div>
     </section>
 
-    <section class="controls">
+    <section class="controls chart-controls">
       <label>
-        Rozsah
+        Rozsah grafu
         <select id="rangeSelect">
           <option value="0.1667">10 minut</option>
           <option value="1">1 hodina</option>
@@ -91,6 +97,9 @@
           <option value="lamin_1min">LAmin 1min</option>
         </select>
       </label>
+      <button type="button" class="ghost-btn is-active" id="chartLiveBtn" aria-pressed="true" title="Vrátit graf k aktuálnímu času">
+        Živě
+      </button>
     </section>
 
     <section class="chart-wrap">
@@ -100,7 +109,17 @@
         <span class="chart-legend-item"><span class="swatch limit"></span>limit</span>
         <span class="chart-legend-item"><span class="swatch aircraft" aria-hidden="true"><span class="mdi mdi-airplane"></span></span>přelet</span>
       </div>
-      <canvas id="chart" height="120"></canvas>
+      <div class="chart-stack" id="chartStack">
+        <canvas id="chart" height="120"></canvas>
+        <div class="chart-spec-strip" id="chartSpecStrip" hidden>
+          <div class="chart-spec-y" id="chartSpecYLabels" aria-hidden="true"></div>
+          <div class="chart-spec-canvas-wrap" id="chartSpecCanvasWrap">
+            <canvas id="chartSpectrogram" height="288" role="img" aria-label="Spektrogram pod grafem"></canvas>
+          </div>
+        </div>
+        <div class="chart-axis-labels" id="chartAxisLabels" hidden aria-hidden="true"></div>
+        <div class="chart-crosshair" id="chartCrosshair" hidden></div>
+      </div>
       <div id="aircraftPopup" class="aircraft-popup" hidden role="dialog" aria-modal="false" aria-label="Detail přeletu"></div>
       <div class="chart-under">
         <div class="aircraft-timeline" id="aircraftTimeline" aria-label="Přelety podél grafu"></div>
@@ -127,26 +146,33 @@
       </div>
     </section>
 
-    <section class="fft-section" aria-label="Spektrum">
-      <div class="spectrum-head">
-        <div>
-          <h2>Spektrum</h2>
-          <p class="spectrum-hint" id="fftHint">1/3-oktáva + oktávy · živě (klikni na spectrogram pro jiný čas)</p>
-        </div>
-        <button type="button" class="ghost-btn" id="fftLiveBtn" hidden>Živě</button>
-      </div>
-      <div class="spectrum-bars" id="spectrumBars"></div>
-    </section>
-
     <section class="spectrogram-section" aria-label="Spektrogram">
       <div class="spectrum-head">
         <div>
           <h2>Spektrogram</h2>
-          <p class="spectrum-hint">Heatmapa · 1/3-oktáva v basu (trvalá čára = tón) · klik = spektrum okamžiku</p>
+          <p class="spectrum-hint">Heatmapa · 1/3-oktáva v basu (trvalá čára = tón)</p>
         </div>
         <div class="chart-legend" aria-hidden="true">
           <span class="chart-legend-item"><span class="swatch limit-change"></span>změna limitu</span>
         </div>
+      </div>
+      <div class="controls spectrogram-controls">
+        <label>
+          Rozsah
+          <select id="specRangeSelect">
+            <option value="0.1667">10 minut</option>
+            <option value="1">1 hodina</option>
+            <option value="6" selected>6 hodin</option>
+            <option value="24">24 hodin</option>
+          </select>
+        </label>
+        <label>
+          Od
+          <input type="datetime-local" id="specStartInput" step="60" />
+        </label>
+        <button type="button" class="ghost-btn is-active" id="specLiveBtn" aria-pressed="true">
+          Živě
+        </button>
       </div>
       <div class="spectrogram-wrap">
         <div class="spectrogram-y" id="specYLabels" aria-hidden="true"></div>
@@ -164,7 +190,7 @@
         <div class="spectrum-head">
           <div>
             <h3 class="offline-title">Bez dat (offline)</h3>
-            <p class="spectrum-hint" id="offlineHint">Výpadky ve vybraném rozsahu · stejná osa X jako hlavní graf</p>
+            <p class="spectrum-hint" id="offlineHint">Výpadky v rozsahu spektrogramu</p>
           </div>
           <button type="button" class="ghost-btn" id="offlineExpandBtn" aria-expanded="false">
             Rozšířené
@@ -220,6 +246,6 @@
     </div>
   </footer>
 
-  <script src="/static/app.js?v=30"></script>
+  <script src="/static/app.js?v=37"></script>
 </body>
 </html>

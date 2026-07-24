@@ -138,10 +138,19 @@ main {
   padding: 0.5rem 1.5rem 1rem;
 }
 
+.hero-row {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+  gap: 1.25rem 2rem;
+  align-items: center;
+  padding: 1.25rem 0 0.5rem;
+  animation: rise 0.7s ease both;
+}
+
 .hero-level {
   text-align: center;
-  padding: 1.75rem 0 0.85rem;
-  animation: rise 0.7s ease both;
+  padding: 0.5rem 0;
+  min-width: 0;
 }
 
 @keyframes rise {
@@ -167,7 +176,7 @@ main {
 .hero-level .level {
   margin: 0.35rem 0 0;
   font-family: var(--font-mono);
-  font-size: clamp(3.8rem, 12vw, 6.5rem);
+  font-size: clamp(3.2rem, 8vw, 5.25rem);
   font-weight: 500;
   line-height: 1;
   letter-spacing: -0.04em;
@@ -269,10 +278,32 @@ main {
   line-height: 1.5;
 }
 
-.spectrogram-section,
-.fft-section {
+.spectrogram-section {
   margin: 0 0 0.75rem;
   animation: rise 0.85s ease 0.06s both;
+}
+
+.hero-row .fft-section {
+  margin: 0;
+  min-width: 0;
+}
+
+.hero-row .spectrum-bars {
+  gap: 0.28rem;
+}
+
+.hero-row .s-band {
+  grid-template-columns: 3.6rem 1fr 2.8rem;
+  gap: 0.5rem;
+}
+
+.hero-row .s-track {
+  height: 0.55rem;
+}
+
+.hero-row .s-label,
+.hero-row .s-val {
+  font-size: 0.72rem;
 }
 
 .spectrogram-wrap {
@@ -522,10 +553,6 @@ main {
   gap: 0.35rem;
 }
 
-.spectrum-bars.locked .s-fill {
-  background: linear-gradient(90deg, #3d6b9a, #7eb8e8);
-}
-
 .s-band {
   display: grid;
   grid-template-columns: 4.2rem 1fr 3.2rem;
@@ -601,6 +628,139 @@ main {
   font-family: var(--font-ui);
   font-size: 0.95rem;
   min-width: 10rem;
+}
+
+.chart-controls .ghost-btn {
+  align-self: flex-end;
+  margin-bottom: 0.1rem;
+}
+
+.chart-wrap canvas {
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+
+.chart-wrap canvas.is-dragging {
+  cursor: grabbing;
+}
+
+.chart-stack {
+  position: relative;
+}
+
+.chart-spec-strip {
+  box-sizing: border-box;
+  display: flex;
+  align-items: stretch;
+  height: 18rem;
+  margin: 0;
+  width: 100%;
+}
+
+.chart-spec-strip[hidden] {
+  display: none;
+}
+
+.chart-spec-y {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  box-sizing: border-box;
+  padding: 0.1rem 0.4rem 0.1rem 0;
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  line-height: 1;
+  color: var(--muted);
+  text-align: right;
+  user-select: none;
+}
+
+.chart-spec-canvas-wrap {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 18rem;
+  border: 1px solid var(--line);
+  border-radius: 0.25rem;
+  overflow: hidden;
+  background: #0a1010;
+}
+
+.chart-spec-canvas-wrap canvas {
+  display: block;
+  width: 100%;
+  height: 18rem;
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+
+.chart-spec-canvas-wrap canvas.is-dragging {
+  cursor: grabbing;
+}
+
+.chart-axis-labels {
+  position: relative;
+  box-sizing: border-box;
+  height: 1.35rem;
+  margin: 0.2rem 0 0.05rem;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.chart-axis-labels[hidden] {
+  display: none;
+}
+
+.chart-axis-labels span {
+  position: absolute;
+  top: 0;
+  transform: translateX(-50%);
+  white-space: nowrap;
+}
+
+.chart-crosshair {
+  position: absolute;
+  top: 0;
+  width: 0;
+  border-left: 1px solid rgba(232, 240, 236, 0.78);
+  pointer-events: none;
+  z-index: 6;
+  transform: translateX(-0.5px);
+}
+
+.chart-crosshair[hidden] {
+  display: none;
+}
+
+.chart-stack.has-spec #chart {
+  margin-bottom: 0.2rem;
+}
+
+.controls input[type="datetime-local"] {
+  appearance: none;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 0.45rem;
+  padding: 0.55rem 0.8rem;
+  font-family: var(--font-ui);
+  font-size: 0.95rem;
+  min-width: 12rem;
+  color-scheme: dark;
+}
+
+.spectrogram-controls {
+  align-items: flex-end;
+  margin: 0 0 0.85rem;
+}
+
+.spectrogram-controls .ghost-btn {
+  align-self: flex-end;
+  margin-bottom: 0.1rem;
 }
 
 .chart-wrap {
@@ -695,7 +855,10 @@ main {
   align-items: flex-start;
   justify-content: space-between;
   gap: 0.6rem;
-  margin-bottom: 0.45rem;
+}
+
+.aircraft-popup-head + .aircraft-popup-grid {
+  margin-top: 0.45rem;
 }
 
 .aircraft-popup-title {
@@ -744,14 +907,6 @@ main {
 .aircraft-popup-grid dd {
   margin: 0;
   font-variant-numeric: tabular-nums;
-}
-
-.aircraft-popup-foot {
-  margin-top: 0.55rem;
-  padding-top: 0.4rem;
-  border-top: 1px solid rgba(232, 240, 236, 0.1);
-  color: var(--muted, #a8bab2);
-  font-size: 0.68rem;
 }
 
 .chart-under {
@@ -1142,6 +1297,16 @@ main {
 }
 
 @media (max-width: 700px) {
+  .hero-row {
+    grid-template-columns: 1fr;
+    gap: 1rem;
+    padding-top: 0.85rem;
+  }
+
+  .hero-level .level {
+    font-size: clamp(3.4rem, 16vw, 5rem);
+  }
+
   .stats,
   .derived {
     grid-template-columns: repeat(2, 1fr);
