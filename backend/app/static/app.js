@@ -49,7 +49,6 @@ const state = {
   weatherTimeline: [],
   chartRange: { t0: 0, t1: 1 },
   aircraftOverflights: [],
-  aircraftHits: [],
   aircraftPopupId: null,
 };
 
@@ -268,124 +267,6 @@ const offlineBandsPlugin = {
   },
 };
 
-const AIRCRAFT_HIT_R = 14;
-
-function drawAircraftIcon(ctx, x, y, active) {
-  const s = active ? 11 : 9.5;
-  ctx.save();
-  ctx.translate(x, y);
-  ctx.rotate(-Math.PI / 2);
-  ctx.fillStyle = active ? "#e8f0ec" : "#b8c9c0";
-  ctx.strokeStyle = "rgba(2, 6, 14, 0.65)";
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  ctx.moveTo(0, -s);
-  ctx.lineTo(s * 0.32, s * 0.15);
-  ctx.lineTo(s * 0.9, s * 0.32);
-  ctx.lineTo(s * 0.32, s * 0.42);
-  ctx.lineTo(0, s * 0.95);
-  ctx.lineTo(-s * 0.32, s * 0.42);
-  ctx.lineTo(-s * 0.9, s * 0.32);
-  ctx.lineTo(-s * 0.32, s * 0.15);
-  ctx.closePath();
-  ctx.fill();
-  ctx.stroke();
-  ctx.restore();
-}
-
-/** X pozice času v chartArea podle aktuální osy grafu. */
-function aircraftPixelX(chart, tSec) {
-  const { chartArea, scales } = chart;
-  const xScale = scales?.x;
-  if (!chartArea || !xScale) return null;
-  const min = Number(xScale.min);
-  const max = Number(xScale.max);
-  if (!Number.isFinite(min) || !Number.isFinite(max) || max <= min) return null;
-  const tMs = tSec * 1000;
-  if (tMs < min || tMs > max) return null;
-  const pct = (tMs - min) / (max - min);
-  return chartArea.left + pct * (chartArea.right - chartArea.left);
-}
-
-/** Y na křivce dBA v čase t (lineární interpolace), jinak null. */
-function aircraftPixelYOnCurve(chart, tSec) {
-  const yScale = chart.scales?.y;
-  const data = chart.data?.datasets?.[0]?.data;
-  if (!yScale || !data?.length) return null;
-  const tMs = tSec * 1000;
-  let prev = null;
-  let next = null;
-  for (const p of data) {
-    if (p == null || p.x == null || p.y == null) continue;
-    if (p.x <= tMs) prev = p;
-    if (p.x >= tMs) {
-      next = p;
-      break;
-    }
-  }
-  if (prev && next) {
-    if (next.x === prev.x) return yScale.getPixelForValue(prev.y);
-    const u = (tMs - prev.x) / (next.x - prev.x);
-    const v = prev.y + (next.y - prev.y) * u;
-    return yScale.getPixelForValue(v);
-  }
-  return null;
-}
-
-/** Markery přeletů: svislá čára v čase closest_ts + ikona. */
-const aircraftMarkersPlugin = {
-  id: "aircraftMarkers",
-  afterDatasetsDraw(chart) {
-    const items = state.aircraftOverflights || [];
-    const { ctx, chartArea, scales } = chart;
-    state.aircraftHits = [];
-    if (!chartArea || !scales?.x || !items.length) return;
-
-    for (const item of items) {
-      if (item.t == null) continue;
-      const px = aircraftPixelX(chart, item.t);
-      if (px == null) continue;
-
-      const onCurve = aircraftPixelYOnCurve(chart, item.t);
-      const iconY =
-        onCurve != null
-          ? Math.min(chartArea.bottom - 12, Math.max(chartArea.top + 12, onCurve - 14))
-          : chartArea.top + 14;
-      const active = state.aircraftPopupId === item.id;
-
-      ctx.save();
-      ctx.beginPath();
-      ctx.rect(
-        chartArea.left,
-        chartArea.top,
-        chartArea.right - chartArea.left,
-        chartArea.bottom - chartArea.top
-      );
-      ctx.clip();
-
-      ctx.strokeStyle = active ? "rgba(232,240,236,0.55)" : "rgba(184,201,192,0.40)";
-      ctx.lineWidth = 1;
-      ctx.setLineDash([3, 3]);
-      ctx.beginPath();
-      ctx.moveTo(px + 0.5, chartArea.top);
-      ctx.lineTo(px + 0.5, chartArea.bottom);
-      ctx.stroke();
-      ctx.setLineDash([]);
-
-      if (onCurve != null) {
-        ctx.fillStyle = active ? "#e8f0ec" : "rgba(184,201,192,0.9)";
-        ctx.beginPath();
-        ctx.arc(px, onCurve, active ? 3.2 : 2.4, 0, Math.PI * 2);
-        ctx.fill();
-      }
-      ctx.restore();
-
-      drawAircraftIcon(ctx, px, iconY, active);
-      state.aircraftHits.push({ id: item.id, x: px, y: iconY, item });
-    }
-  },
-};
-
 function aircraftLabel(item) {
   const cs = (item.callsign || "").trim();
   return cs || (item.icao24 || "—").toUpperCase();
@@ -426,15 +307,22 @@ function closeAircraftPopup() {
     el.innerHTML = "";
   }
   state.aircraftPopupId = null;
-  if (state.chart) state.chart.draw();
+  document.querySelectorAll(".aircraft-slot.is-active").forEach((n) => {
+    n.classList.remove("is-active");
+  });
 }
 
-function openAircraftPopup(item, clientX, clientY) {
+function openAircraftPopup(item, anchorEl) {
   const el = $("aircraftPopup");
   const wrap = el?.closest(".chart-wrap") || el?.parentElement;
   if (!el || !wrap || !item) return;
 
   state.aircraftPopupId = item.id;
+  document.querySelectorAll(".aircraft-slot.is-active").forEach((n) => {
+    n.classList.remove("is-active");
+  });
+  if (anchorEl) anchorEl.classList.add("is-active");
+
   const country = item.origin_country || "—";
   el.innerHTML = `
     <div class="aircraft-popup-head">
@@ -459,8 +347,16 @@ function openAircraftPopup(item, clientX, clientY) {
   const wrapRect = wrap.getBoundingClientRect();
   const approxW = 220;
   const approxH = 210;
-  let left = clientX - wrapRect.left + 12;
-  let top = clientY - wrapRect.top + 12;
+  let left;
+  let top;
+  if (anchorEl) {
+    const r = anchorEl.getBoundingClientRect();
+    left = r.left - wrapRect.left + r.width / 2 - approxW / 2;
+    top = r.bottom - wrapRect.top + 8;
+  } else {
+    left = 8;
+    top = 8;
+  }
   left = Math.max(8, Math.min(left, wrapRect.width - approxW - 8));
   top = Math.max(8, Math.min(top, wrapRect.height - approxH - 8));
   el.style.left = `${left}px`;
@@ -470,23 +366,6 @@ function openAircraftPopup(item, clientX, clientY) {
     ev.stopPropagation();
     closeAircraftPopup();
   });
-  if (state.chart) state.chart.draw();
-}
-
-function hitAircraftMarker(canvas, clientX, clientY) {
-  const rect = canvas.getBoundingClientRect();
-  const mx = clientX - rect.left;
-  const my = clientY - rect.top;
-  let best = null;
-  let bestD = AIRCRAFT_HIT_R;
-  for (const hit of state.aircraftHits || []) {
-    const d = Math.hypot(hit.x - mx, hit.y - my);
-    if (d <= bestD) {
-      bestD = d;
-      best = hit;
-    }
-  }
-  return best;
 }
 
 /** Společný časový rozsah hlavní graf + offline timeline. */
@@ -506,7 +385,7 @@ function initChart() {
   const ctx = $("chart").getContext("2d");
   state.chart = new Chart(ctx, {
     type: "line",
-    plugins: [dayNightBandsPlugin, aircraftMarkersPlugin],
+    plugins: [dayNightBandsPlugin],
     data: {
       datasets: [
         {
@@ -1070,16 +949,68 @@ function weatherSlotTitle(s) {
   return parts.join(" · ");
 }
 
-function layoutWeatherTimeline() {
-  const el = $("weatherTimeline");
+function layoutChartUnderTimelines() {
   const chart = state.chart;
-  if (!el || !chart?.chartArea) return;
+  if (!chart?.chartArea) return;
   const { left, right } = chart.chartArea;
   const width = chart.width || chart.canvas?.clientWidth || 0;
-  el.style.marginLeft = "0";
-  el.style.width = "100%";
-  el.style.paddingLeft = `${Math.max(0, left)}px`;
-  el.style.paddingRight = `${Math.max(0, width - right)}px`;
+  const padL = `${Math.max(0, left)}px`;
+  const padR = `${Math.max(0, width - right)}px`;
+  for (const id of ["weatherTimeline", "aircraftTimeline"]) {
+    const el = $(id);
+    if (!el) continue;
+    el.style.marginLeft = "0";
+    el.style.width = "100%";
+    el.style.paddingLeft = padL;
+    el.style.paddingRight = padR;
+  }
+}
+
+function layoutWeatherTimeline() {
+  layoutChartUnderTimelines();
+}
+
+function renderAircraftTimeline() {
+  const el = $("aircraftTimeline");
+  if (!el) return;
+  const { t0, t1 } = state.chartRange;
+  const span = Math.max(1e-6, t1 - t0);
+  const items = state.aircraftOverflights || [];
+  layoutChartUnderTimelines();
+
+  el.classList.toggle("is-empty", !items.length);
+  if (!items.length) {
+    el.innerHTML = "";
+    el.title = "Žádné přelety v tomto rozsahu";
+    return;
+  }
+  el.title = "";
+
+  // mírný horizontální rozestup při shodném čase
+  const sorted = [...items].sort((a, b) => a.t - b.t);
+  const offsets = new Map();
+  let run = 0;
+  for (let i = 0; i < sorted.length; i++) {
+    if (i > 0 && Math.abs(sorted[i].t - sorted[i - 1].t) < 90) run += 1;
+    else run = 0;
+    offsets.set(sorted[i].id, run);
+  }
+
+  el.innerHTML = sorted
+    .map((item) => {
+      const pct = ((item.t - t0) / span) * 100;
+      if (pct < -2 || pct > 102) return "";
+      const nudge = (offsets.get(item.id) || 0) * 0.55;
+      const left = Math.min(100, Math.max(0, pct + nudge));
+      const active = state.aircraftPopupId === item.id ? " is-active" : "";
+      const label = aircraftLabel(item).replace(/"/g, "&quot;");
+      const tip = `${label} · ${fmtTime(item.t)} · ${fmtAltM(item.altitude_m)} · ${fmtKm(item.distance_m)}`.replace(
+        /"/g,
+        "&quot;"
+      );
+      return `<button type="button" class="aircraft-slot${active}" data-aircraft-id="${item.id}" style="left:${left.toFixed(2)}%" title="${tip}" aria-label="Přelet ${label}"><span class="mdi mdi-airplane" aria-hidden="true"></span></button>`;
+    })
+    .join("");
 }
 
 function renderWeatherTimeline() {
@@ -1088,7 +1019,7 @@ function renderWeatherTimeline() {
   const { t0, t1 } = state.chartRange;
   const span = Math.max(1e-6, t1 - t0);
   const samples = state.weatherTimeline || [];
-  layoutWeatherTimeline();
+  layoutChartUnderTimelines();
 
   if (!samples.length) {
     el.innerHTML = "";
@@ -1185,6 +1116,7 @@ async function refreshHistory() {
       state.chartRange = { t0, t1 };
     }
     state.chart.update("none");
+    renderAircraftTimeline();
     renderWeatherTimeline();
 
     const s = data.stats || {};
@@ -1217,21 +1149,14 @@ function bind() {
     gapsEl.hidden = !open;
   });
 
-  const mainChart = $("chart");
-  mainChart?.addEventListener("click", (ev) => {
-    const hit = hitAircraftMarker(mainChart, ev.clientX, ev.clientY);
-    if (hit) {
-      openAircraftPopup(hit.item, ev.clientX, ev.clientY);
-      return;
-    }
-    closeAircraftPopup();
-  });
-  mainChart?.addEventListener("mousemove", (ev) => {
-    const hit = hitAircraftMarker(mainChart, ev.clientX, ev.clientY);
-    mainChart.style.cursor = hit ? "pointer" : "";
-  });
-  mainChart?.addEventListener("mouseleave", () => {
-    mainChart.style.cursor = "";
+  const aircraftRow = $("aircraftTimeline");
+  aircraftRow?.addEventListener("click", (ev) => {
+    const btn = ev.target.closest?.(".aircraft-slot");
+    if (!btn || !aircraftRow.contains(btn)) return;
+    ev.stopPropagation();
+    const id = Number(btn.getAttribute("data-aircraft-id"));
+    const item = (state.aircraftOverflights || []).find((a) => a.id === id);
+    if (item) openAircraftPopup(item, btn);
   });
   document.addEventListener("keydown", (ev) => {
     if (ev.key === "Escape") closeAircraftPopup();
@@ -1240,7 +1165,7 @@ function bind() {
     const popup = $("aircraftPopup");
     if (!popup || popup.hidden) return;
     if (popup.contains(ev.target)) return;
-    if (mainChart && (ev.target === mainChart || mainChart.contains(ev.target))) return;
+    if (ev.target.closest?.(".aircraft-slot")) return;
     closeAircraftPopup();
   });
 
@@ -1274,6 +1199,7 @@ function bind() {
 
   window.addEventListener("resize", () => {
     drawSpectrogram();
+    renderAircraftTimeline();
     renderWeatherTimeline();
     closeAircraftPopup();
   });
