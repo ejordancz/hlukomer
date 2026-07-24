@@ -18,6 +18,10 @@
   box-sizing: border-box;
 }
 
+html {
+  scroll-behavior: smooth;
+}
+
 html,
 body {
   margin: 0;
@@ -47,13 +51,25 @@ body {
 }
 
 .top {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 20;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 1rem;
-  padding: 1.75rem 1.5rem 1.65rem;
+  padding: 1.5rem 1.5rem 1rem;
   max-width: 1100px;
   margin: 0 auto;
+  width: 100%;
+  pointer-events: none;
+}
+
+.top .brand,
+.top .status {
+  pointer-events: auto;
 }
 
 .brand {
@@ -135,7 +151,7 @@ body {
 main {
   max-width: 1100px;
   margin: 0 auto;
-  padding: 1.15rem 1.5rem 2.5rem;
+  padding: 0 1.5rem 3rem;
 }
 
 @keyframes rise {
@@ -238,8 +254,15 @@ main {
 }
 
 .live-stage {
-  margin: 0.35rem 0 0.75rem;
-  padding: 2.35rem 0 2.6rem;
+  position: relative;
+  box-sizing: border-box;
+  min-height: 100dvh;
+  margin: 0;
+  padding: 5.5rem 0 4.5rem;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
   animation: rise 0.7s ease both;
 }
 
@@ -250,6 +273,52 @@ main {
   align-items: stretch;
   margin: 0;
   padding: 0;
+  width: 100%;
+  max-height: calc(100dvh - 9.5rem);
+}
+
+.live-scroll-hint {
+  position: absolute;
+  left: 50%;
+  bottom: 1.35rem;
+  transform: translateX(-50%);
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.35rem;
+  color: var(--muted-dim);
+  font-size: 0.68rem;
+  font-weight: 500;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  text-decoration: none;
+  transition: color 0.25s ease;
+}
+
+.live-scroll-hint::after {
+  content: "";
+  width: 0.55rem;
+  height: 0.55rem;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: rotate(45deg);
+  animation: scroll-nudge 1.8s ease-in-out infinite;
+}
+
+.live-scroll-hint:hover {
+  color: var(--muted);
+}
+
+@keyframes scroll-nudge {
+  0%,
+  100% {
+    transform: rotate(45deg) translate(0, 0);
+    opacity: 0.55;
+  }
+  50% {
+    transform: rotate(45deg) translate(2px, 2px);
+    opacity: 1;
+  }
 }
 
 .live-b-hero {
@@ -320,10 +389,11 @@ main {
 }
 
 .history {
-  margin: 3.5rem 0 0;
-  padding: 2.5rem 0 0;
+  margin: 0;
+  padding: 3.25rem 0 0;
   border-top: 1px solid var(--line);
   animation: rise 0.9s ease 0.08s both;
+  scroll-margin-top: 1.5rem;
 }
 
 .history-head {
@@ -1174,14 +1244,15 @@ main {
 
 @media (max-width: 700px) {
   .live-stage {
-    padding: 1.75rem 0 2rem;
-    margin: 0.25rem 0 0.5rem;
+    padding: 5rem 0 4rem;
+    min-height: 100dvh;
   }
 
   .live-b {
     grid-template-columns: 1fr;
-    gap: 2rem;
+    gap: 1.75rem;
     align-items: start;
+    max-height: none;
   }
 
   .live-b-right .spectrum-bars {
@@ -1203,8 +1274,8 @@ main {
   }
 
   .history {
-    margin-top: 2.75rem;
-    padding-top: 2rem;
+    margin-top: 0;
+    padding-top: 2.5rem;
   }
 
   .chart-context .stats {
