@@ -801,21 +801,30 @@ AIRCRAFT_HISTORY_CAP = 500
 
 def fetch_aircraft_overflights(t0: float, t1: float) -> list[dict[str, Any]]:
     """Přeletové markery v časovém rozsahu grafu (max AIRCRAFT_HISTORY_CAP)."""
-    with db() as conn:
-        rows = conn.execute(
-            """
-            SELECT
-                id, icao24, callsign, origin_country,
-                closest_ts, closest_distance_m, closest_altitude_m,
-                closest_velocity_ms, closest_track_deg, closest_vertical_rate_ms,
-                first_seen_ts, last_seen_ts
-            FROM aircraft_overflights
-            WHERE closest_ts >= ? AND closest_ts <= ?
-            ORDER BY closest_distance_m ASC, closest_ts DESC
-            LIMIT ?
-            """,
-            (t0, t1, AIRCRAFT_HISTORY_CAP),
-        ).fetchall()
+
+    def _query() -> list[sqlite3.Row]:
+        with db() as conn:
+            return conn.execute(
+                """
+                SELECT
+                    id, icao24, callsign, origin_country,
+                    closest_ts, closest_distance_m, closest_altitude_m,
+                    closest_velocity_ms, closest_track_deg, closest_vertical_rate_ms,
+                    first_seen_ts, last_seen_ts
+                FROM aircraft_overflights
+                WHERE closest_ts >= ? AND closest_ts <= ?
+                ORDER BY closest_distance_m ASC, closest_ts DESC
+                LIMIT ?
+                """,
+                (t0, t1, AIRCRAFT_HISTORY_CAP),
+            ).fetchall()
+
+    try:
+        rows = _query()
+    except sqlite3.OperationalError:
+        # Obnovená / ručně zkopírovaná stará DB bez tabulky
+        ensure_db()
+        rows = _query()
     # Pro UI chronologicky
     items = [
         {
@@ -1417,6 +1426,8 @@ async def admin_restore(
     for side in (Path(str(DB_PATH) + "-wal"), Path(str(DB_PATH) + "-shm")):
         side.unlink(missing_ok=True)
     shutil.move(str(tmp_path), str(DB_PATH))
+    # Starší backup nemusí mít novější tabulky (aircraft_overflights, …)
+    ensure_db()
     return {"status": "ok"}
 
 
