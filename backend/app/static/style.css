@@ -51,7 +51,7 @@ body {
   align-items: center;
   justify-content: space-between;
   gap: 1rem;
-  padding: 1.75rem 1.5rem 1rem;
+  padding: 1.75rem 1.5rem 1.65rem;
   max-width: 1100px;
   margin: 0 auto;
 }
@@ -135,7 +135,7 @@ body {
 main {
   max-width: 1100px;
   margin: 0 auto;
-  padding: 0.75rem 1.5rem 2.5rem;
+  padding: 1.15rem 1.5rem 2.5rem;
 }
 
 @keyframes rise {
@@ -238,63 +238,76 @@ main {
 }
 
 .live-stage {
-  margin: 0 0 0.5rem;
-  padding: 1.75rem 1.5rem 2rem;
-  border-radius: 0.15rem;
-  background:
-    linear-gradient(
-      165deg,
-      rgba(232, 240, 236, 0.045) 0%,
-      rgba(232, 240, 236, 0.018) 48%,
-      transparent 100%
-    );
-  box-shadow: inset 0 1px 0 rgba(232, 240, 236, 0.06);
+  margin: 0.35rem 0 0.75rem;
+  padding: 2.35rem 0 2.6rem;
   animation: rise 0.7s ease both;
 }
 
 .live-b {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr);
-  gap: 2rem 3rem;
-  align-items: start;
+  grid-template-columns: minmax(0, 1.35fr) minmax(0, 0.85fr);
+  gap: 2.25rem 3.25rem;
+  align-items: stretch;
   margin: 0;
   padding: 0;
 }
 
+.live-b-hero {
+  text-align: center;
+}
+
+.live-b-hero .label {
+  font-size: 0.78rem;
+  letter-spacing: 0.14em;
+}
+
 .live-b-left .level {
-  margin-top: 0.55rem;
-  font-size: clamp(3rem, 6.5vw, 4.35rem);
+  margin-top: 0.85rem;
+  font-size: clamp(4rem, 9vw, 5.75rem);
 }
 
 .live-b-left .unit {
-  margin-top: 0.35rem;
+  margin-top: 0.5rem;
+  font-size: 1.05rem;
 }
 
 .live-b-left .meta {
-  margin-top: 0.75rem;
+  margin-top: 0.95rem;
 }
 
 .live-b-metrics {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 1.35rem 1.5rem;
-  margin-top: 1.75rem;
-  padding-top: 1.35rem;
+  gap: 1.65rem 1.85rem;
+  margin-top: 2.25rem;
+  padding-top: 1.75rem;
   border-top: 1px solid var(--line);
 }
 
 .live-b-metric {
   min-width: 0;
+  text-align: center;
+}
+
+.live-b-right {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
 }
 
 .live-b-right .spectrum-bars {
-  gap: 0.42rem;
-  padding-top: 0.15rem;
+  flex: 1 1 auto;
+  justify-content: space-between;
+  gap: 0.2rem;
+  padding-top: 0;
+  min-height: 100%;
 }
 
 .live-b-right .s-band {
+  flex: 1 1 0;
   grid-template-columns: 3.6rem 1fr 2.8rem;
   gap: 0.55rem;
+  min-height: 0;
 }
 
 .live-b-right .s-track {
@@ -307,8 +320,8 @@ main {
 }
 
 .history {
-  margin: 2.75rem 0 0;
-  padding: 2rem 0 0;
+  margin: 3.5rem 0 0;
+  padding: 2.5rem 0 0;
   border-top: 1px solid var(--line);
   animation: rise 0.9s ease 0.08s both;
 }
@@ -544,6 +557,53 @@ main {
 
 .chart-crosshair[hidden] {
   display: none;
+}
+
+.chart-spec-tooltip {
+  position: absolute;
+  z-index: 7;
+  pointer-events: none;
+  width: 11.5rem;
+  padding: 0.55rem 0.65rem 0.6rem;
+  border: 1px solid rgba(232, 240, 236, 0.14);
+  border-radius: 0.35rem;
+  background: rgba(10, 16, 16, 0.92);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  backdrop-filter: blur(6px);
+}
+
+.chart-spec-tooltip[hidden] {
+  display: none;
+}
+
+.chart-spec-tooltip .chart-spec-tip-head {
+  margin: 0 0 0.45rem;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  letter-spacing: 0.02em;
+}
+
+.chart-spec-tooltip .spectrum-bars {
+  gap: 0.22rem;
+}
+
+.chart-spec-tooltip .s-band {
+  grid-template-columns: 2.9rem 1fr 2.2rem;
+  gap: 0.35rem;
+}
+
+.chart-spec-tooltip .s-track {
+  height: 0.38rem;
+}
+
+.chart-spec-tooltip .s-fill {
+  transition: none;
+}
+
+.chart-spec-tooltip .s-label,
+.chart-spec-tooltip .s-val {
+  font-size: 0.62rem;
 }
 
 .chart-stack.has-spec #chart {
@@ -1114,24 +1174,37 @@ main {
 
 @media (max-width: 700px) {
   .live-stage {
-    padding: 1.25rem 1rem 1.5rem;
-    margin-inline: -1rem;
-    border-radius: 0;
+    padding: 1.75rem 0 2rem;
+    margin: 0.25rem 0 0.5rem;
   }
 
   .live-b {
     grid-template-columns: 1fr;
-    gap: 1.75rem;
+    gap: 2rem;
+    align-items: start;
+  }
+
+  .live-b-right .spectrum-bars {
+    flex: none;
+    min-height: 0;
+    justify-content: flex-start;
+    gap: 0.42rem;
+  }
+
+  .live-b-right .s-band {
+    flex: none;
   }
 
   .live-b-metrics {
     grid-template-columns: 1fr 1fr;
-    gap: 1.1rem;
+    gap: 1.35rem 1.25rem;
+    margin-top: 1.85rem;
+    padding-top: 1.45rem;
   }
 
   .history {
-    margin-top: 2rem;
-    padding-top: 1.5rem;
+    margin-top: 2.75rem;
+    padding-top: 2rem;
   }
 
   .chart-context .stats {

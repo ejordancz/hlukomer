@@ -20,6 +20,26 @@ const SPECTRUM_FALLBACK = [
   "16 kHz",
 ];
 
+const SPECTRUM_BAND_IDS = [
+  "25",
+  "31",
+  "40",
+  "50",
+  "63",
+  "80",
+  "100",
+  "125",
+  "160",
+  "200",
+  "250",
+  "500",
+  "1k",
+  "2k",
+  "4k",
+  "8k",
+  "16k",
+];
+
 const LF_BANDS = new Set([
   "25",
   "31",
@@ -34,8 +54,8 @@ const LF_BANDS = new Set([
 ]);
 
 const CHART_SPEC_HEIGHT = 288;
-/** Spektrogram pod hlavním grafem jen pro rozsah ≤ 6 h. */
-const CHART_SPEC_MAX_HOURS = 6;
+/** Spektrogram pod hlavním grafem jen pro rozsah ≤ 24 h. */
+const CHART_SPEC_MAX_HOURS = 24;
 
 const state = {
   threshold: 45,
@@ -51,8 +71,10 @@ const state = {
   chartSpecReqId: 0,
   chartSpectrogram: null,
   hoverTs: null,
-  /** Tooltip hlavního grafu při hoveru nad markrem (letadlo). */
-  hoverTooltip: false,
+  /** Klíč aktivních bodů Chart.js tooltipu (méně update při mousemove). */
+  chartTooltipKey: null,
+  /** Čas sloupce spektrogramu v tipu (kvůli méně překreslení). */
+  specTooltipColTs: null,
   /** Hlavní graf: true = okno končí „teď“, start se posouvá s časem. */
   chartLive: true,
   /** Pevný začátek okna grafu (unix s), když chartLive=false. */
@@ -473,6 +495,8 @@ function initChart() {
       responsive: true,
       maintainAspectRatio: true,
       animation: { duration: 450 },
+      // Tooltip řídíme sami (graf / spektrogram / letadlo) — bez native mouseout.
+      events: [],
       interaction: { mode: "index", intersect: false },
       scales: {
         x: {
@@ -569,24 +593,17 @@ function spectrumStats(bands) {
   return { vmin, vmax, span };
 }
 
-function renderSpectrumBars(bands) {
-  const root = document.querySelector(".js-spectrum-rows");
-  if (!root) return;
+function spectrumBarsHtml(bands) {
   if (!bands || !bands.length) {
-    if (!root.dataset.empty) {
-      root.dataset.empty = "1";
-      root.innerHTML = SPECTRUM_FALLBACK.map(
-        (label) =>
-          `<div class="s-band empty"><span class="s-label">${label}</span>` +
-          `<div class="s-track"><div class="s-fill" style="width:0%"></div></div>` +
-          `<span class="s-val">—</span></div>`
-      ).join("");
-    }
-    return;
+    return SPECTRUM_FALLBACK.map(
+      (label) =>
+        `<div class="s-band empty"><span class="s-label">${label}</span>` +
+        `<div class="s-track"><div class="s-fill" style="width:0%"></div></div>` +
+        `<span class="s-val">—</span></div>`
+    ).join("");
   }
-  delete root.dataset.empty;
   const { vmin, vmax, span } = spectrumStats(bands);
-  root.innerHTML = bands
+  return bands
     .map((b) => {
       const v = Number(b.value);
       const pct = Number.isNaN(v)
@@ -602,6 +619,20 @@ function renderSpectrumBars(bands) {
       );
     })
     .join("");
+}
+
+function renderSpectrumBars(bands) {
+  const root = document.querySelector(".js-spectrum-rows");
+  if (!root) return;
+  if (!bands || !bands.length) {
+    if (!root.dataset.empty) {
+      root.dataset.empty = "1";
+      root.innerHTML = spectrumBarsHtml(null);
+    }
+    return;
+  }
+  delete root.dataset.empty;
+  root.innerHTML = spectrumBarsHtml(bands);
 }
 
 async function refreshLatest() {
@@ -751,6 +782,7 @@ function layoutChartSpecStrip() {
 
 function hideChartTooltip() {
   const chart = state.chart;
+  state.chartTooltipKey = null;
   if (!chart?.tooltip) return;
   chart.setActiveElements([]);
   chart.tooltip.setActiveElements([], { x: 0, y: 0 });
@@ -785,18 +817,86 @@ function showChartTooltipAt(tsSec) {
     hideChartTooltip();
     return;
   }
+  const key = active.map((a) => `${a.datasetIndex}:${a.index}`).join("|");
+  if (state.chartTooltipKey === key) return;
+  state.chartTooltipKey = key;
   chart.setActiveElements(active);
   chart.tooltip.setActiveElements(active, { x: anchor.x, y: anchor.y });
   chart.update("none");
 }
 
 function hideChartCrosshair() {
-  const hadTooltip = state.hoverTooltip;
   state.hoverTs = null;
-  state.hoverTooltip = false;
   const el = $("chartCrosshair");
   if (el) el.hidden = true;
-  if (hadTooltip) hideChartTooltip();
+  hideChartTooltip();
+  hideSpecTooltip();
+}
+
+function nearestSpecColumn(tsSec) {
+  const cols = state.chartSpectrogram?.columns;
+  if (!cols?.length) return null;
+  let best = null;
+  let bestDist = Infinity;
+  for (const c of cols) {
+    const d = Math.abs(c.t - tsSec);
+    if (d < bestDist) {
+      bestDist = d;
+      best = c;
+    }
+  }
+  if (!best) return null;
+  const { t0, t1 } = state.chartRange;
+  const maxDist = Math.max(90, (t1 - t0) * 0.03);
+  if (bestDist > maxDist) return null;
+  return best;
+}
+
+function hideSpecTooltip() {
+  state.specTooltipColTs = null;
+  const tip = $("chartSpecTooltip");
+  if (tip) tip.hidden = true;
+}
+
+/** Spektrum u crosshairu — vlevo/vpravo podle místa u spektrogramu. */
+function showSpecTooltip(tsSec, lineLeft) {
+  const tip = $("chartSpecTooltip");
+  const wrap = document.querySelector(".chart-wrap");
+  const strip = $("chartSpecStrip");
+  if (!tip || !wrap || !chartSpecEnabled() || strip?.hidden) {
+    hideSpecTooltip();
+    return;
+  }
+  const col = nearestSpecColumn(tsSec);
+  if (!col?.v?.length) {
+    hideSpecTooltip();
+    return;
+  }
+  const labels = state.chartSpectrogram?.labels || SPECTRUM_FALLBACK;
+  if (state.specTooltipColTs !== col.t) {
+    state.specTooltipColTs = col.t;
+    const bands = col.v.map((v, i) => ({
+      band: SPECTRUM_BAND_IDS[i] || "",
+      label: labels[i] || SPECTRUM_FALLBACK[i] || "",
+      value: v,
+    }));
+    tip.innerHTML =
+      `<div class="chart-spec-tip-head">${fmtTime(col.t)}</div>` +
+      `<div class="spectrum-bars">${spectrumBarsHtml(bands)}</div>`;
+  }
+  tip.hidden = false;
+  const wrapW = wrap.clientWidth || wrap.getBoundingClientRect().width;
+  const tipW = tip.offsetWidth || 184;
+  const gap = 20;
+  const placeRight = wrapW - lineLeft >= lineLeft;
+  let left = placeRight ? lineLeft + gap : lineLeft - gap - tipW;
+  left = Math.max(4, Math.min(left, wrapW - tipW - 4));
+  const wrapRect = wrap.getBoundingClientRect();
+  const top = strip.getBoundingClientRect().top - wrapRect.top;
+  tip.style.left = `${left}px`;
+  tip.style.top = `${Math.max(0, top)}px`;
+  tip.classList.toggle("is-right", placeRight);
+  tip.classList.toggle("is-left", !placeRight);
 }
 
 function timeFromChartClientX(clientX) {
@@ -810,14 +910,13 @@ function timeFromChartClientX(clientX) {
   return Number.isFinite(ms) ? ms / 1000 : null;
 }
 
-function showChartCrosshair(tsSec, { tooltip } = {}) {
+function showChartCrosshair(tsSec) {
   const el = $("chartCrosshair");
   const wrap = document.querySelector(".chart-wrap");
   const chart = state.chart;
   const canvas = $("chart");
   if (!el || !wrap || !chart?.chartArea || !canvas) return;
   state.hoverTs = tsSec;
-  if (tooltip === true) state.hoverTooltip = true;
   const wrapRect = wrap.getBoundingClientRect();
   const canvasRect = canvas.getBoundingClientRect();
   const xPix = chart.scales.x.getPixelForValue(tsSec * 1000);
@@ -838,7 +937,8 @@ function showChartCrosshair(tsSec, { tooltip } = {}) {
   el.style.top = `${top}px`;
   el.style.height = `${Math.max(0, bottom - top)}px`;
   el.title = fmtTime(tsSec);
-  if (state.hoverTooltip) showChartTooltipAt(tsSec);
+  showChartTooltipAt(tsSec);
+  showSpecTooltip(tsSec, left);
 }
 
 function renderChartAxisLabels() {
@@ -957,6 +1057,7 @@ async function refreshChartSpectrogram() {
   if (!chartSpecEnabled()) {
     state.chartSpectrogram = null;
     drawChartSpectrogram();
+    if (state.hoverTs == null) hideSpecTooltip();
     return;
   }
   if (state.chartPanning) return;
@@ -968,8 +1069,12 @@ async function refreshChartSpectrogram() {
     const data = await fetchJson(url);
     if (reqId !== state.chartSpecReqId) return;
     state.chartSpectrogram = data;
+    state.specTooltipColTs = null;
     drawChartSpectrogram();
     renderChartAxisLabels();
+    if (state.hoverTs != null) {
+      showChartCrosshair(state.hoverTs);
+    }
   } catch (err) {
     if (reqId === state.chartSpecReqId) console.error(err);
   }
@@ -1115,6 +1220,7 @@ async function refreshHistory() {
       x: p.t * 1000,
       y: p.v,
     }));
+    state.chartTooltipKey = null;
 
     // Rozsah z selectu / panu — spektrogram má vlastní ovládání.
     const range = selectedHistoryRange();
@@ -1262,7 +1368,7 @@ function bindChartCrosshair() {
   stack.addEventListener("mousemove", (ev) => {
     if (state.chartPanning) return;
     const onSurface = ev.target.closest?.(
-      "#chart, #chartSpectrogram, .chart-spec-strip, .chart-spec-canvas-wrap"
+      "#chart, #chartSpectrogram, .chart-spec-strip, .chart-spec-canvas-wrap, .chart-axis-labels"
     );
     if (!onSurface) {
       hideChartCrosshair();
@@ -1324,7 +1430,7 @@ function bind() {
     if (!btn || !aircraftRow.contains(btn)) return;
     const id = Number(btn.getAttribute("data-aircraft-id"));
     const item = (state.aircraftOverflights || []).find((a) => a.id === id);
-    if (item) showChartCrosshair(item.t, { tooltip: true });
+    if (item) showChartCrosshair(item.t);
   });
   aircraftRow?.addEventListener("pointerout", (ev) => {
     const btn = ev.target.closest?.(".aircraft-slot");

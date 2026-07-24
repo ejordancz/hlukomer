@@ -39,10 +39,12 @@
     <section class="live-stage" aria-label="Aktuální hladina a spektrum">
       <section class="live-b" aria-live="polite">
         <div class="live-b-left">
-          <p class="label">Aktuální LAeq (1 s)</p>
-          <p class="level js-live-level">—.—</p>
-          <p class="unit">dBA</p>
-          <p class="meta js-live-meta">čekám na data z ESP32…</p>
+          <div class="live-b-hero">
+            <p class="label">Aktuální LAeq (1 s)</p>
+            <p class="level js-live-level">—.—</p>
+            <p class="unit">dBA</p>
+            <p class="meta js-live-meta">čekám na data z ESP32…</p>
+          </div>
           <div class="live-b-metrics">
             <div class="live-b-metric">
               <span class="derived-label js-over-label">Od limitu</span>
@@ -148,6 +150,7 @@
           </div>
         </div>
         <div class="chart-crosshair" id="chartCrosshair" hidden></div>
+        <div class="chart-spec-tooltip" id="chartSpecTooltip" hidden aria-hidden="true"></div>
       </section>
     </section>
   </main>
@@ -172,6 +175,6 @@
     </div>
   </footer>
 
-  <script src="/static/app.js?v=41"></script>
+  <script src="/static/app.js?v=45"></script>
 </body>
 </html>
