@@ -73,7 +73,7 @@ const state = {
   hoverTs: null,
   /** Klíč aktivních bodů Chart.js tooltipu (méně update při mousemove). */
   chartTooltipKey: null,
-  /** Čas sloupce spektrogramu v tipu (kvůli méně překreslení). */
+  /** Čas sloupce spektrogramu u Y stupnice (méně překreslení). */
   specTooltipColTs: null,
   /** Hlavní graf: true = okno končí „teď“, start se posouvá s časem. */
   chartLive: true,
@@ -854,16 +854,18 @@ function nearestSpecColumn(tsSec) {
 
 function hideSpecTooltip() {
   state.specTooltipColTs = null;
-  const tip = $("chartSpecTooltip");
-  if (tip) tip.hidden = true;
+  const bars = $("chartSpecBars");
+  if (bars) {
+    bars.hidden = true;
+    bars.innerHTML = "";
+  }
 }
 
-/** Spektrum u crosshairu — vlevo/vpravo podle místa u spektrogramu. */
-function showSpecTooltip(tsSec, lineLeft) {
-  const tip = $("chartSpecTooltip");
-  const wrap = document.querySelector(".chart-wrap");
+/** Spektrum u crosshairu — dB + linky vlevo přes spektrogram, vedle Y stupnice. */
+function showSpecTooltip(tsSec, _lineLeft) {
+  const barsEl = $("chartSpecBars");
   const strip = $("chartSpecStrip");
-  if (!tip || !wrap || !chartSpecEnabled() || strip?.hidden) {
+  if (!barsEl || !chartSpecEnabled() || strip?.hidden) {
     hideSpecTooltip();
     return;
   }
@@ -872,31 +874,37 @@ function showSpecTooltip(tsSec, lineLeft) {
     hideSpecTooltip();
     return;
   }
+  if (state.specTooltipColTs === col.t && !barsEl.hidden) return;
+  state.specTooltipColTs = col.t;
+
   const labels = state.chartSpectrogram?.labels || SPECTRUM_FALLBACK;
-  if (state.specTooltipColTs !== col.t) {
-    state.specTooltipColTs = col.t;
-    const bands = col.v.map((v, i) => ({
-      band: SPECTRUM_BAND_IDS[i] || "",
-      label: labels[i] || SPECTRUM_FALLBACK[i] || "",
-      value: v,
-    }));
-    tip.innerHTML =
-      `<div class="chart-spec-tip-head">${fmtTime(col.t)}</div>` +
-      `<div class="spectrum-bars">${spectrumBarsHtml(bands)}</div>`;
-  }
-  tip.hidden = false;
-  const wrapW = wrap.clientWidth || wrap.getBoundingClientRect().width;
-  const tipW = tip.offsetWidth || 184;
-  const gap = 20;
-  const placeRight = wrapW - lineLeft >= lineLeft;
-  let left = placeRight ? lineLeft + gap : lineLeft - gap - tipW;
-  left = Math.max(4, Math.min(left, wrapW - tipW - 4));
-  const wrapRect = wrap.getBoundingClientRect();
-  const top = strip.getBoundingClientRect().top - wrapRect.top;
-  tip.style.left = `${left}px`;
-  tip.style.top = `${Math.max(0, top)}px`;
-  tip.classList.toggle("is-right", placeRight);
-  tip.classList.toggle("is-left", !placeRight);
+  const bands = col.v.map((v, i) => ({
+    band: SPECTRUM_BAND_IDS[i] || "",
+    label: labels[i] || SPECTRUM_FALLBACK[i] || "",
+    value: v,
+  }));
+  const { vmin, vmax, span } = spectrumStats(bands);
+  const topFirst = [...bands].reverse();
+
+  barsEl.innerHTML = topFirst
+    .map((b) => {
+      const v = Number(b.value);
+      const pct = Number.isNaN(v)
+        ? 0
+        : Math.max(6, Math.min(100, ((v - vmin) / span) * 100));
+      const hot = !Number.isNaN(v) && v >= vmax - 1.5;
+      const lf = LF_BANDS.has(String(b.band));
+      const cls = `chart-spec-bar${hot ? " is-hot" : ""}${lf ? " is-lf" : ""}`;
+      const txt = Number.isNaN(v) ? "—" : fmtDb(v);
+      return (
+        `<div class="${cls}" style="--p:${pct.toFixed(1)}%">` +
+        `<span class="chart-spec-bar-val">${txt}</span>` +
+        `<span class="chart-spec-bar-track"><span class="chart-spec-bar-fill"></span></span>` +
+        `</div>`
+      );
+    })
+    .join("");
+  barsEl.hidden = false;
 }
 
 function timeFromChartClientX(clientX) {
