@@ -703,7 +703,7 @@ function layoutChartUnderTimelines() {
   if (!(right > left)) return;
   const padL = `${Math.max(0, left)}px`;
   const plotW = `${right - left}px`;
-  for (const id of ["weatherTimeline", "aircraftTimeline", "chartContextGuides", "stats"]) {
+  for (const id of ["weatherTimeline", "aircraftTimeline", "chartContextGuides"]) {
     const el = $(id);
     if (!el) continue;
     // Šířka = chartArea (ne padding) — left% u absolute slotů musí sedět na plot.

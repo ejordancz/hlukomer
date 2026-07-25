@@ -117,10 +117,13 @@ body {
   line-height: 1.1;
 }
 
-.brand-sub {
-  margin: 0.15rem 0 0;
+.brand-note {
+  margin: 0.35rem 0 0;
   color: var(--muted);
-  font-size: 0.85rem;
+  font-size: 0.68rem;
+  line-height: 1.4;
+  opacity: 0.72;
+  white-space: nowrap;
 }
 
 .status {
@@ -410,13 +413,6 @@ main {
   text-transform: uppercase;
 }
 
-.history-lede {
-  margin: 0.45rem 0 0;
-  color: var(--muted);
-  font-size: 0.95rem;
-  line-height: 1.55;
-}
-
 .ghost-btn.is-active {
   background: rgba(196, 240, 130, 0.12);
   border-color: rgba(196, 240, 130, 0.65);
@@ -528,6 +524,36 @@ main {
   margin-bottom: 0.1rem;
 }
 
+.history > .stats {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 0.75rem 1rem;
+  box-sizing: border-box;
+  margin: -0.35rem 0 1.35rem;
+  padding: 0.85rem 0 0;
+  border-top: 1px solid var(--line);
+}
+
+.history > .stats .stat {
+  padding: 0;
+  border-bottom: none;
+}
+
+.history > .stats .stat-label {
+  display: block;
+  color: var(--muted);
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin-bottom: 0.2rem;
+}
+
+.history > .stats .stat-value {
+  font-family: var(--font-mono);
+  font-size: 1.1rem;
+  font-variant-numeric: tabular-nums;
+}
+
 .chart-wrap canvas {
   cursor: grab;
   touch-action: none;
@@ -545,8 +571,8 @@ main {
 .chart-spec-strip {
   box-sizing: border-box;
   display: flex;
-  align-items: stretch;
-  height: 18rem;
+  align-items: flex-start;
+  height: auto;
   margin: 0;
   width: 100%;
 }
@@ -563,6 +589,8 @@ main {
   flex-direction: column;
   justify-content: space-between;
   box-sizing: border-box;
+  height: 18rem;
+  margin-top: 0.72rem;
   padding: 0.1rem 0.28rem 0.1rem 0;
   font-family: var(--font-mono);
   font-size: 0.62rem;
@@ -578,10 +606,33 @@ main {
   white-space: nowrap;
 }
 
+.chart-spec-plot {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.chart-spec-unit {
+  flex: 0 0 auto;
+  box-sizing: border-box;
+  height: 0.72rem;
+  padding: 0 0.75rem 0 0.15rem;
+  width: 2.4em;
+  font-family: var(--font-mono);
+  font-size: 0.58rem;
+  font-weight: 500;
+  line-height: 1;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  text-align: left;
+  user-select: none;
+}
+
 .chart-spec-canvas-wrap {
   position: relative;
   z-index: 1;
-  flex: 1 1 auto;
+  flex: 0 0 auto;
   min-width: 0;
   height: 18rem;
   border: 1px solid var(--line);
@@ -1023,36 +1074,6 @@ main {
   opacity: 0.7;
 }
 
-.chart-context .stats {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 0.75rem 1rem;
-  box-sizing: border-box;
-  margin: 0;
-  padding: 0.85rem 0 1rem;
-  border-top: 1px solid var(--line);
-}
-
-.chart-context .stat {
-  padding: 0;
-  border-bottom: none;
-}
-
-.chart-context .stat-label {
-  display: block;
-  color: var(--muted);
-  font-size: 0.68rem;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  margin-bottom: 0.2rem;
-}
-
-.chart-context .stat-value {
-  font-family: var(--font-mono);
-  font-size: 1.1rem;
-  font-variant-numeric: tabular-nums;
-}
-
 .site-footer {
   max-width: 1100px;
   margin: 0 auto;
@@ -1060,11 +1081,11 @@ main {
 }
 
 .privacy {
-  max-width: 40rem;
+  max-width: none;
 }
 
 .privacy-eyebrow {
-  margin: 0 0 0.35rem;
+  margin: 0 0 1.15rem;
   color: var(--accent);
   font-size: 0.72rem;
   font-weight: 500;
@@ -1085,30 +1106,31 @@ main {
   list-style: none;
   margin: 0;
   padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 0.85rem;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1.5rem 1.75rem;
 }
 
 .privacy-points li {
-  display: grid;
-  grid-template-columns: 8.5rem 1fr;
-  gap: 0.75rem 1.1rem;
-  align-items: baseline;
-  padding-left: 0.9rem;
-  border-left: 2px solid rgba(196, 240, 130, 0.35);
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  padding: 0;
+  border-left: none;
+  padding-top: 0.85rem;
+  border-top: 2px solid rgba(196, 240, 130, 0.35);
 }
 
 .privacy-label {
   color: var(--ink);
-  font-size: 0.82rem;
+  font-size: 0.88rem;
   font-weight: 500;
 }
 
 .privacy-text {
   color: var(--muted);
-  font-size: 0.9rem;
-  line-height: 1.6;
+  font-size: 0.88rem;
+  line-height: 1.55;
 }
 
 .admin-link-wrap {
@@ -1327,7 +1349,7 @@ main {
     padding-top: 2.5rem;
   }
 
-  .chart-context .stats {
+  .history > .stats {
     grid-template-columns: repeat(2, 1fr);
   }
 
@@ -1340,8 +1362,8 @@ main {
     padding-inline: 1rem;
   }
 
-  .privacy-points li {
+  .privacy-points {
     grid-template-columns: 1fr;
-    gap: 0.2rem;
+    gap: 1.15rem;
   }
 }
