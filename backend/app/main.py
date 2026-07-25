@@ -1658,6 +1658,11 @@ def index() -> FileResponse:
     return FileResponse(STATIC_DIR / "index.html")
 
 
+@app.get("/favicon.ico")
+def favicon() -> FileResponse:
+    return FileResponse(STATIC_DIR / "favicon.png", media_type="image/png")
+
+
 @app.get("/admin")
 def admin_page() -> FileResponse:
     return FileResponse(STATIC_DIR / "admin.html")
