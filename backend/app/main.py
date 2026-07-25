@@ -25,11 +25,15 @@ from pydantic import BaseModel, Field
 from starlette.background import BackgroundTask
 
 from . import aircraft as aircraft_svc
+from . import storage
 from . import weather as weather_svc
 
 import logging
 
 logger = logging.getLogger("hlukomer")
+logging.getLogger("hlukomer.storage").setLevel(logging.INFO)
+if not logging.getLogger().handlers:
+    logging.basicConfig(level=logging.INFO)
 
 DATA_DIR = Path(os.getenv("DATA_DIR", "/data"))
 DB_PATH = DATA_DIR / "hlukomer.db"
@@ -53,8 +57,8 @@ ALERT_DAY_START_HOUR = int(os.getenv("ALERT_DAY_START_HOUR", "6"))
 ALERT_DAY_END_HOUR = int(os.getenv("ALERT_DAY_END_HOUR", "22"))
 TZ_NAME = os.getenv("TZ", "Europe/Prague")
 TZ = ZoneInfo(TZ_NAME)
-RETENTION_DAYS = int(os.getenv("RETENTION_DAYS", "90"))
-LIVE_RETENTION_DAYS = int(os.getenv("LIVE_RETENTION_DAYS", "7"))
+RETENTION_DAYS = storage.RETENTION_DAYS
+LIVE_RETENTION_DAYS = storage.LIVE_RETENTION_DAYS
 
 STATIC_DIR = Path(__file__).parent / "static"
 
@@ -142,15 +146,13 @@ LEGACY_SPECTRUM_BANDS: tuple[str, ...] = (
 )
 LEGACY_SPECTRUM_METRICS: tuple[str, ...] = tuple(f"oct_{b}" for b in LEGACY_SPECTRUM_BANDS)
 
-LIVE_METRICS = frozenset(
-    {"laeq_1s", "lez_1s", "lfi_db", *SPECTRUM_METRICS, *LEGACY_SPECTRUM_METRICS}
-)
+LIVE_METRICS = storage.LIVE_METRICS_EAV
 
-app = FastAPI(title="Hlukoměr", version="1.1.0")
+app = FastAPI(title="Hlukoměr", version="1.2.0")
 
 
 def _db_to_energy(db: float) -> float:
-    return 10.0 ** (db / 10.0)
+    return storage.db_to_energy(db)
 
 
 def analyze_spectrum(
@@ -429,15 +431,9 @@ def fetch_offline_stats(
 ) -> dict[str, Any]:
     """Offline statistika z časových značek laeq_1s (bez downsample)."""
     t1 = until if until is not None else utc_now()
-    rows = conn.execute(
-        """
-        SELECT ts FROM measurements
-        WHERE device_id = ? AND metric = 'laeq_1s' AND ts >= ? AND ts <= ?
-        ORDER BY ts ASC
-        """,
-        (device_id, since, t1),
-    ).fetchall()
-    return compute_offline([float(r["ts"]) for r in rows], since, t1)
+    return compute_offline(
+        storage.fetch_laeq_timestamps(conn, device_id, since, t1), since, t1
+    )
 
 
 class IngestPayload(BaseModel):
@@ -463,18 +459,6 @@ def ensure_db() -> None:
     with db() as conn:
         conn.executescript(
             """
-            CREATE TABLE IF NOT EXISTS measurements (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                ts REAL NOT NULL,
-                device_id TEXT NOT NULL,
-                kind TEXT NOT NULL,
-                metric TEXT NOT NULL,
-                value REAL NOT NULL
-            );
-            CREATE INDEX IF NOT EXISTS idx_meas_ts_metric
-                ON measurements(metric, ts);
-            CREATE INDEX IF NOT EXISTS idx_meas_device_ts
-                ON measurements(device_id, ts);
             CREATE TABLE IF NOT EXISTS meta (
                 key TEXT PRIMARY KEY,
                 value TEXT NOT NULL
@@ -520,7 +504,34 @@ def ensure_db() -> None:
                 ON aircraft_overflights(icao24, last_seen_ts);
             """
         )
+        storage.ensure_wide_tables(conn)
         _migrate_aircraft_columns(conn)
+        eav_status = storage.get_meta(conn, storage.META_STATUS, "")
+        if eav_status != "dropped":
+            conn.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS measurements (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    ts REAL NOT NULL,
+                    device_id TEXT NOT NULL,
+                    kind TEXT NOT NULL,
+                    metric TEXT NOT NULL,
+                    value REAL NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_meas_ts_metric
+                    ON measurements(metric, ts);
+                CREATE INDEX IF NOT EXISTS idx_meas_device_ts
+                    ON measurements(device_id, ts);
+                """
+            )
+            n = conn.execute("SELECT COUNT(*) AS n FROM measurements").fetchone()["n"]
+            if int(n or 0) == 0 and eav_status in ("", "pending"):
+                storage.set_meta(conn, storage.META_STATUS, "done")
+        else:
+            # Po dropu EAV — wide je zdroj pravdy
+            pass
+        if eav_status == "" and not storage.table_exists(conn, "measurements"):
+            storage.set_meta(conn, storage.META_STATUS, "done")
 
 
 def _migrate_aircraft_columns(conn: sqlite3.Connection) -> None:
@@ -636,14 +647,14 @@ def insert_metric(
     metric: str,
     value: float,
 ) -> None:
-    if value != value:  # NaN
+    """Legacy helper — preferovat storage.upsert_*; ponecháno pro kompatibilitu testů."""
+    v = storage.sanitize_value(value)
+    if v is None:
         return
-    if value < -50 or value > 200:
-        return
-    conn.execute(
-        "INSERT INTO measurements (ts, device_id, kind, metric, value) VALUES (?,?,?,?,?)",
-        (ts, device_id, kind, metric, value),
-    )
+    if metric in storage.MINUTE_COLS or kind == "minute":
+        storage.upsert_minute(conn, ts, device_id, {metric: v})
+    elif metric in storage.LIVE_VALUE_COLS:
+        storage.upsert_sample_1s(conn, ts, device_id, {metric: v})
 
 
 @app.on_event("startup")
@@ -655,28 +666,17 @@ def on_startup() -> None:
     aircraft_svc.set_persist_callback(persist_aircraft_sightings)
     aircraft_svc.start_aircraft_poll()
     _start_aircraft_enrichment_backfill()
+    storage.start_background_jobs(db, prune_fn=prune_old)
 
 
 def prune_old() -> None:
     now = utc_now()
-    cutoff_all = now - RETENTION_DAYS * 86400
-    cutoff_live = now - LIVE_RETENTION_DAYS * 86400
     ac_days = aircraft_svc.get_config().retention_days
     if ac_days is None:
         ac_days = RETENTION_DAYS
     cutoff_aircraft = now - max(1, ac_days) * 86400
     with db() as conn:
-        conn.execute("DELETE FROM measurements WHERE ts < ?", (cutoff_all,))
-        placeholders = ",".join("?" * len(LIVE_METRICS))
-        conn.execute(
-            f"DELETE FROM measurements WHERE metric IN ({placeholders}) AND ts < ?",
-            (*LIVE_METRICS, cutoff_live),
-        )
-        conn.execute("DELETE FROM weather_snapshots WHERE ts < ?", (cutoff_all,))
-        conn.execute(
-            "DELETE FROM aircraft_overflights WHERE closest_ts < ?",
-            (cutoff_aircraft,),
-        )
+        storage.prune_storage(conn, aircraft_cutoff=cutoff_aircraft)
 
 
 def persist_weather_samples(samples: list[dict[str, Any]]) -> None:
@@ -1049,28 +1049,18 @@ def fetch_weather_timeline(t0: float, t1: float, hours: float) -> list[dict[str,
 def latest_metric_value(
     conn: sqlite3.Connection, device_id: str, metric: str
 ) -> Optional[tuple[float, float]]:
-    row = conn.execute(
-        """
-        SELECT ts, value FROM measurements
-        WHERE device_id = ? AND metric = ?
-        ORDER BY ts DESC LIMIT 1
-        """,
-        (device_id, metric),
-    ).fetchone()
-    if not row:
-        return None
-    return float(row["ts"]), float(row["value"])
+    return storage.latest_metric(conn, device_id, metric)
 
 
 @app.post("/api/v1/ingest")
 def ingest(payload: IngestPayload, _: None = Depends(require_api_key)) -> dict[str, Any]:
-    metrics_for_spectrum: Optional[tuple[str, ...]] = None
+    spectrum_cols: Optional[tuple[str, ...]] = None
     if payload.spectrum is not None:
         n = len(payload.spectrum)
         if n == len(SPECTRUM_BANDS):
-            metrics_for_spectrum = SPECTRUM_METRICS
+            spectrum_cols = SPECTRUM_METRICS
         elif n == len(LEGACY_SPECTRUM_BANDS):
-            metrics_for_spectrum = LEGACY_SPECTRUM_METRICS
+            spectrum_cols = LEGACY_SPECTRUM_METRICS
         else:
             raise HTTPException(
                 status_code=400,
@@ -1082,44 +1072,48 @@ def ingest(payload: IngestPayload, _: None = Depends(require_api_key)) -> dict[s
     ts = payload.ts if payload.ts is not None else utc_now()
     written = 0
     with db() as conn:
-        pairs = [
-            ("laeq_1s", payload.laeq_1s),
-            ("lez_1s", payload.lez_1s),
-            ("lfi_db", payload.lfi_db),
-            ("laeq_1min", payload.laeq_1min),
-            ("lamax_1min", payload.lamax_1min),
-            ("lamin_1min", payload.lamin_1min),
-        ]
-        for metric, value in pairs:
-            if value is None:
-                continue
-            insert_metric(conn, ts, payload.device_id, payload.kind, metric, float(value))
-            written += 1
-        if payload.spectrum and metrics_for_spectrum:
-            for metric, value in zip(metrics_for_spectrum, payload.spectrum):
-                insert_metric(conn, ts, payload.device_id, payload.kind, metric, float(value))
-                written += 1
+        written += storage.ingest_live(
+            conn,
+            ts,
+            payload.device_id,
+            laeq_1s=payload.laeq_1s,
+            lez_1s=payload.lez_1s,
+            lfi_db=payload.lfi_db,
+            spectrum=payload.spectrum,
+            spectrum_cols=spectrum_cols,
+        )
+        written += storage.upsert_minute(
+            conn,
+            ts,
+            payload.device_id,
+            {
+                "laeq_1min": payload.laeq_1min,
+                "lamax_1min": payload.lamax_1min,
+                "lamin_1min": payload.lamin_1min,
+            },
+        )
     if written == 0:
         raise HTTPException(status_code=400, detail="No metric values provided")
     return {"ok": True, "written": written, "ts": ts}
 
 
 def fetch_spectrum(conn: sqlite3.Connection, device_id: str) -> Optional[dict[str, Any]]:
+    row = storage.latest_row_1s(conn, device_id)
     values: list[Optional[float]] = [None] * len(SPECTRUM_METRICS)
     latest_ts: Optional[float] = None
-    for i, metric in enumerate(SPECTRUM_METRICS):
-        row = conn.execute(
-            """
-            SELECT ts, value FROM measurements
-            WHERE device_id = ? AND metric = ?
-            ORDER BY ts DESC LIMIT 1
-            """,
-            (device_id, metric),
-        ).fetchone()
-        if not row:
-            continue
-        latest_ts = row["ts"] if latest_ts is None else max(latest_ts, row["ts"])
-        values[i] = float(row["value"])
+    if row:
+        latest_ts = float(row["ts"])
+        for i, metric in enumerate(SPECTRUM_METRICS):
+            if row[metric] is not None:
+                values[i] = float(row[metric])
+    else:
+        # EAV / cold fallback per band
+        for i, metric in enumerate(SPECTRUM_METRICS):
+            got = storage.latest_metric(conn, device_id, metric)
+            if got:
+                latest_ts = got[0] if latest_ts is None else max(latest_ts, got[0])
+                values[i] = got[1]
+
     if any(v is None for v in values) or latest_ts is None:
         bands: list[dict[str, Any]] = []
         for i, (band, label) in enumerate(zip(SPECTRUM_BANDS, SPECTRUM_LABELS)):
@@ -1132,7 +1126,6 @@ def fetch_spectrum(conn: sqlite3.Connection, device_id: str) -> Optional[dict[st
 
     lez = latest_metric_value(conn, device_id, "lez_1s")
     lfi = latest_metric_value(conn, device_id, "lfi_db")
-    # použij ESP metriky jen pokud jsou zhruba ze stejného okamžiku
     lez_1s = lez[1] if lez and abs(lez[0] - latest_ts) < 3 else None
     lfi_direct = lfi[1] if lfi and abs(lfi[0] - latest_ts) < 3 else None
     analysis = analyze_spectrum(
@@ -1147,39 +1140,57 @@ def fetch_spectrum_at(
     conn: sqlite3.Connection, device_id: str, ts: float, tolerance: float = 1.5
 ) -> Optional[dict[str, Any]]:
     """Spektrum nejbližší k ts (pro FFT okamžiku)."""
-    values: list[Optional[float]] = [None] * len(SPECTRUM_METRICS)
-    used_ts: Optional[float] = None
-    for i, metric in enumerate(SPECTRUM_METRICS):
-        row = conn.execute(
-            """
-            SELECT ts, value FROM measurements
-            WHERE device_id = ? AND metric = ? AND ts BETWEEN ? AND ?
-            ORDER BY ABS(ts - ?) ASC LIMIT 1
-            """,
-            (device_id, metric, ts - tolerance, ts + tolerance, ts),
-        ).fetchone()
-        if not row:
+    row = storage.nearest_sample(conn, device_id, ts, tolerance=tolerance)
+    if row is None:
+        # EAV fallback
+        values: list[Optional[float]] = [None] * len(SPECTRUM_METRICS)
+        used_ts: Optional[float] = None
+        for i, metric in enumerate(SPECTRUM_METRICS):
+            if not storage.table_exists(conn, "measurements"):
+                return None
+            erow = conn.execute(
+                """
+                SELECT ts, value FROM measurements
+                WHERE device_id = ? AND metric = ? AND ts BETWEEN ? AND ?
+                ORDER BY ABS(ts - ?) ASC LIMIT 1
+                """,
+                (device_id, metric, ts - tolerance, ts + tolerance, ts),
+            ).fetchone()
+            if not erow:
+                return None
+            values[i] = float(erow["value"])
+            used_ts = float(erow["ts"]) if used_ts is None else used_ts
+        if any(v is None for v in values) or used_ts is None:
             return None
-        values[i] = float(row["value"])
-        used_ts = row["ts"] if used_ts is None else used_ts
-    if any(v is None for v in values) or used_ts is None:
+
+        def near(metric: str) -> Optional[float]:
+            r = conn.execute(
+                """
+                SELECT value FROM measurements
+                WHERE device_id = ? AND metric = ? AND ts BETWEEN ? AND ?
+                ORDER BY ABS(ts - ?) ASC LIMIT 1
+                """,
+                (device_id, metric, used_ts - tolerance, used_ts + tolerance, used_ts),
+            ).fetchone()
+            return float(r["value"]) if r else None
+
+        analysis = analyze_spectrum(
+            [float(v) for v in values],  # type: ignore[arg-type]
+            lez_1s=near("lez_1s"),
+            lfi_db_direct=near("lfi_db"),
+        )
+        return {"ts": used_ts, **analysis}
+
+    values_f = [float(row[m]) for m in SPECTRUM_METRICS if row[m] is not None]
+    if len(values_f) != len(SPECTRUM_METRICS):
         return None
-
-    def near(metric: str) -> Optional[float]:
-        row = conn.execute(
-            """
-            SELECT value FROM measurements
-            WHERE device_id = ? AND metric = ? AND ts BETWEEN ? AND ?
-            ORDER BY ABS(ts - ?) ASC LIMIT 1
-            """,
-            (device_id, metric, used_ts - tolerance, used_ts + tolerance, used_ts),
-        ).fetchone()
-        return float(row["value"]) if row else None
-
+    used_ts = float(row["ts"])
+    lez_1s = float(row["lez_1s"]) if row["lez_1s"] is not None else None
+    lfi_direct = float(row["lfi_db"]) if row["lfi_db"] is not None else None
     analysis = analyze_spectrum(
-        [float(v) for v in values],  # type: ignore[arg-type]
-        lez_1s=near("lez_1s"),
-        lfi_db_direct=near("lfi_db"),
+        [float(row[m]) for m in SPECTRUM_METRICS],
+        lez_1s=lez_1s,
+        lfi_db_direct=lfi_direct,
     )
     return {"ts": used_ts, **analysis}
 
@@ -1189,7 +1200,7 @@ def pivot_spectrum_rows(
     max_columns: int,
     metrics: tuple[str, ...] = SPECTRUM_METRICS,
 ) -> tuple[list[dict[str, Any]], Optional[float], Optional[float]]:
-    """Seskupí řádky metric/ts/value do sloupců spectrogramu."""
+    """Seskupí řádky metric/ts/value do sloupců spectrogramu (EAV legacy)."""
     by_ts: dict[float, dict[str, float]] = {}
     for r in rows:
         bucket = by_ts.setdefault(r["ts"], {})
@@ -1201,11 +1212,17 @@ def pivot_spectrum_rows(
         if not all(m in band_map for m in metrics):
             continue
         complete.append((ts, [band_map[m] for m in metrics]))
+    return downsample_spectrum_columns(complete, max_columns)
 
+
+def downsample_spectrum_columns(
+    complete: list[tuple[float, list[float]]],
+    max_columns: int,
+) -> tuple[list[dict[str, Any]], Optional[float], Optional[float]]:
     if not complete:
         return [], None, None
 
-    n_bands = len(metrics)
+    n_bands = len(complete[0][1])
     if len(complete) > max_columns:
         bucket_size = len(complete) / max_columns
         down: list[tuple[float, list[float]]] = []
@@ -1238,19 +1255,13 @@ def latest(device_id: str = Query(default="hlukomer")) -> dict[str, Any]:
     out: dict[str, Any] = {"device_id": device_id, "metrics": {}, **threshold_meta()}
     with db() as conn:
         for metric in metrics:
-            row = conn.execute(
-                """
-                SELECT ts, value FROM measurements
-                WHERE device_id = ? AND metric = ?
-                ORDER BY ts DESC LIMIT 1
-                """,
-                (device_id, metric),
-            ).fetchone()
-            if row:
+            got = storage.latest_metric(conn, device_id, metric)
+            if got:
+                ts, value = got
                 out["metrics"][metric] = {
-                    "value": row["value"],
-                    "ts": row["ts"],
-                    "iso": datetime.fromtimestamp(row["ts"], tz=timezone.utc).isoformat(),
+                    "value": value,
+                    "ts": ts,
+                    "iso": datetime.fromtimestamp(ts, tz=timezone.utc).isoformat(),
                 }
         spectrum = fetch_spectrum(conn, device_id)
         if spectrum:
@@ -1270,11 +1281,7 @@ def latest(device_id: str = Query(default="hlukomer")) -> dict[str, Any]:
                 )
                 if k in spectrum
             }
-        age_row = conn.execute(
-            "SELECT MAX(ts) AS ts FROM measurements WHERE device_id = ?",
-            (device_id,),
-        ).fetchone()
-        last_ts = age_row["ts"] if age_row else None
+        last_ts = storage.max_ts(conn, device_id)
         out["online"] = bool(last_ts and (utc_now() - last_ts) < 30)
         out["last_seen"] = last_ts
     return out
@@ -1309,38 +1316,21 @@ def spectrum_history(
         if t_end <= t_start:
             raise HTTPException(status_code=400, detail="empty time window")
 
-    placeholders = ",".join("?" * len(SPECTRUM_METRICS))
     with db() as conn:
-        rows = conn.execute(
-            f"""
-            SELECT ts, metric, value FROM measurements
-            WHERE device_id = ? AND metric IN ({placeholders})
-              AND ts >= ? AND ts <= ?
-            ORDER BY ts ASC
-            """,
-            (device_id, *SPECTRUM_METRICS, t_start, t_end),
-        ).fetchall()
-    columns, vmin, vmax = pivot_spectrum_rows(rows, max_columns, SPECTRUM_METRICS)
+        complete = storage.fetch_spectrum_columns_raw(
+            conn, device_id, t_start, t_end, SPECTRUM_METRICS
+        )
+    columns, vmin, vmax = downsample_spectrum_columns(complete, max_columns)
     bands = list(SPECTRUM_BANDS)
     labels = list(SPECTRUM_LABELS)
     hz = list(SPECTRUM_HZ)
     note = "1/3-oktáva 25–250 Hz + oktávy výš (IIR). Trvalá čára = tón (např. 250 Hz nebo 50/63 Hz)."
     if not columns:
-        # Do přeflashování ESP: legacy 10 oktáv
-        leg_ph = ",".join("?" * len(LEGACY_SPECTRUM_METRICS))
         with db() as conn:
-            leg_rows = conn.execute(
-                f"""
-                SELECT ts, metric, value FROM measurements
-                WHERE device_id = ? AND metric IN ({leg_ph})
-                  AND ts >= ? AND ts <= ?
-                ORDER BY ts ASC
-                """,
-                (device_id, *LEGACY_SPECTRUM_METRICS, t_start, t_end),
-            ).fetchall()
-        columns, vmin, vmax = pivot_spectrum_rows(
-            leg_rows, max_columns, LEGACY_SPECTRUM_METRICS
-        )
+            complete = storage.fetch_spectrum_columns_raw(
+                conn, device_id, t_start, t_end, LEGACY_SPECTRUM_METRICS
+            )
+        columns, vmin, vmax = downsample_spectrum_columns(complete, max_columns)
         if columns:
             bands = list(LEGACY_SPECTRUM_BANDS)
             labels = [
@@ -1359,6 +1349,17 @@ def spectrum_history(
             note = "Legacy 10 oktáv (starý firmware). Po flashi ESP uvidíš 1/3-oktávu v basu."
     with db() as conn:
         offline = fetch_offline_stats(conn, device_id, t_start, t_end)
+        storage_info = {
+            "hot_retention_hours": storage.HOT_RETENTION_HOURS,
+            "archive_interval_s": storage.ARCHIVE_INTERVAL_S,
+            "resolution": (
+                "1s"
+                if t_start >= storage.hot_cutoff(now)
+                else "mixed"
+                if t_end > storage.hot_cutoff(now)
+                else f"{storage.ARCHIVE_INTERVAL_S}s"
+            ),
+        }
     night_bands, sun_source = build_night_bands(t_start, t_end)
     return {
         "device_id": device_id,
@@ -1375,6 +1376,7 @@ def spectrum_history(
         "limit_change_edges": build_limit_change_edges(t_start, t_end),
         "sun": {"source": sun_source},
         "offline": offline,
+        "storage": storage_info,
         "note": note,
     }
 
@@ -1424,16 +1426,8 @@ def history(
             raise HTTPException(status_code=400, detail="empty time window")
 
     with db() as conn:
-        rows = conn.execute(
-            """
-            SELECT ts, value FROM measurements
-            WHERE device_id = ? AND metric = ? AND ts >= ? AND ts <= ?
-            ORDER BY ts ASC
-            """,
-            (device_id, metric, t_start, t_end),
-        ).fetchall()
+        points = storage.fetch_metric_points(conn, device_id, metric, t_start, t_end)
 
-    points = [{"t": r["ts"], "v": r["value"]} for r in rows]
     if len(points) > max_points:
         points = downsample(points, max_points)
 
@@ -1498,31 +1492,57 @@ def stats(
     result: dict[str, Any] = {"hours": hours, "device_id": device_id, "metrics": {}}
     with db() as conn:
         for metric in ("laeq_1s", "laeq_1min", "lamax_1min", "lamin_1min"):
-            row = conn.execute(
-                """
-                SELECT
-                    COUNT(*) AS n,
-                    MIN(value) AS vmin,
-                    MAX(value) AS vmax,
-                    AVG(value) AS vavg
-                FROM measurements
-                WHERE device_id = ? AND metric = ? AND ts >= ?
-                """,
-                (device_id, metric, since),
-            ).fetchone()
-            if row and row["n"]:
-                result["metrics"][metric] = {
-                    "count": row["n"],
-                    "min": row["vmin"],
-                    "max": row["vmax"],
-                    "avg": row["vavg"],
-                }
+            st = storage.metric_stats(conn, device_id, metric, since)
+            if st:
+                result["metrics"][metric] = st
     return result
 
 
 @app.get("/api/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/api/admin/storage")
+def admin_storage(_: None = Depends(require_admin_session)) -> dict[str, Any]:
+    with db() as conn:
+        return storage.storage_status(conn)
+
+
+@app.post("/api/admin/storage/verify")
+def admin_storage_verify(_: None = Depends(require_admin_session)) -> dict[str, Any]:
+    with db() as conn:
+        status = storage.get_meta(conn, storage.META_STATUS, "")
+        if status == "migrating":
+            raise HTTPException(status_code=409, detail="Migrace ještě běží")
+        if status not in ("migrated", "verified"):
+            # doběhni zbývající chunky synchronně (max ~30 s)
+            deadline = time.time() + 30
+            while time.time() < deadline:
+                r = storage.migrate_eav_chunk(conn, batch_size=5000)
+                if r.get("done"):
+                    break
+        return storage.auto_verify_migration(conn)
+
+
+@app.post("/api/admin/storage/drop-eav")
+def admin_storage_drop_eav(_: None = Depends(require_admin_session)) -> dict[str, Any]:
+    with db() as conn:
+        result = storage.drop_eav_table(conn)
+    if not result.get("ok"):
+        raise HTTPException(status_code=409, detail=result.get("error", "drop failed"))
+    return result
+
+
+@app.post("/api/admin/storage/vacuum")
+def admin_storage_vacuum(_: None = Depends(require_admin_session)) -> dict[str, Any]:
+    """Blokující VACUUM — spouštět off-peak."""
+    conn = sqlite3.connect(DB_PATH, timeout=120)
+    try:
+        conn.execute("VACUUM")
+    finally:
+        conn.close()
+    return {"ok": True}
 
 
 @app.post("/api/admin/login")
