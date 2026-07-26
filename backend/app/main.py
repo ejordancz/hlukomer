@@ -19,7 +19,7 @@ from typing import Any, Iterator, Optional
 from zoneinfo import ZoneInfo
 
 from fastapi import Cookie, Depends, FastAPI, Header, HTTPException, Query, Request, Response
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from starlette.background import BackgroundTask
@@ -55,6 +55,9 @@ ALERT_DAY_DBA = float(os.getenv("ALERT_DAY_DBA", "45"))
 ALERT_NIGHT_DBA = float(os.getenv("ALERT_NIGHT_DBA", "40"))
 ALERT_DAY_START_HOUR = int(os.getenv("ALERT_DAY_START_HOUR", "6"))
 ALERT_DAY_END_HOUR = int(os.getenv("ALERT_DAY_END_HOUR", "22"))
+# Jen zobrazení na dashboardu (neovlivní DB / API metriky)
+DISPLAY_WINDOW_CORRECTION_DB = float(os.getenv("DISPLAY_WINDOW_CORRECTION_DB", "3"))
+DISPLAY_TONAL_PENALTY_DB = float(os.getenv("DISPLAY_TONAL_PENALTY_DB", "5"))
 TZ_NAME = os.getenv("TZ", "Europe/Prague")
 TZ = ZoneInfo(TZ_NAME)
 RETENTION_DAYS = storage.RETENTION_DAYS
@@ -1484,8 +1487,22 @@ def downsample(points: list[dict[str, float]], max_points: int) -> list[dict[str
 
 
 @app.get("/")
-def index() -> FileResponse:
-    return FileResponse(STATIC_DIR / "index.html")
+def index() -> HTMLResponse:
+    html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+    config = {
+        "window_correction_db": DISPLAY_WINDOW_CORRECTION_DB,
+        "tonal_penalty_db": DISPLAY_TONAL_PENALTY_DB,
+    }
+    config_script = (
+        "<script>"
+        f"window.__DISPLAY_CONFIG={json.dumps(config, separators=(',', ':'))};"
+        "</script>"
+    )
+    if "<!-- DISPLAY_CONFIG -->" in html:
+        html = html.replace("<!-- DISPLAY_CONFIG -->", config_script, 1)
+    else:
+        html = html.replace("</head>", f"{config_script}\n</head>", 1)
+    return HTMLResponse(html)
 
 
 @app.get("/favicon.ico")

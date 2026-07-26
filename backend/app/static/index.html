@@ -9,10 +9,11 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,700&family=IBM+Plex+Mono:wght@400;500&family=Sora:wght@400;500;600&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/static/style.css?v=53" />
+  <link rel="stylesheet" href="/static/style.css?v=56" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@mdi/font@7.4.47/css/materialdesignicons.min.css" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.9/dist/chart.umd.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+  <!-- DISPLAY_CONFIG -->
 </head>
 <body>
   <div class="bg" aria-hidden="true"></div>
@@ -31,9 +32,57 @@
         <p class="brand-note">Orientační měření.</p>
       </div>
     </div>
-    <div class="status" id="status">
-      <span class="dot" id="onlineDot"></span>
-      <span id="onlineLabel">připojuji…</span>
+    <div class="top-right">
+      <div class="display-toggles" id="displayToggles">
+        <div class="display-toggle" data-switch="window">
+          <div class="pill-switch-wrap">
+            <button
+              type="button"
+              class="pill-switch"
+              id="switchWindow"
+              role="switch"
+              aria-checked="true"
+              aria-labelledby="labelWindowCorr"
+              aria-describedby="descWindowCorr"
+            >
+              <span class="pill-switch-thumb" aria-hidden="true"></span>
+            </button>
+          </div>
+          <span class="display-toggle-label" id="labelWindowCorr">Korekce měření u okna</span>
+          <div class="display-toggle-tip" id="tipWindowCorr" role="tooltip">
+            Odečte od naměřených hodnot 3 dB. Zvuk přímo u zdi je silnější kvůli odrazu od skla a fasády. Tímto získáte reálnou hladinu hluku ve volném prostoru 2 metry před oknem.
+          </div>
+          <span class="visually-hidden" id="descWindowCorr">
+            Odečte od naměřených hodnot 3 dB. Zvuk přímo u zdi je silnější kvůli odrazu od skla a fasády. Tímto získáte reálnou hladinu hluku ve volném prostoru 2 metry před oknem.
+          </span>
+        </div>
+        <div class="display-toggle" data-switch="tonal">
+          <div class="pill-switch-wrap">
+            <button
+              type="button"
+              class="pill-switch"
+              id="switchTonal"
+              role="switch"
+              aria-checked="false"
+              aria-labelledby="labelTonalCorr"
+              aria-describedby="descTonalCorr"
+            >
+              <span class="pill-switch-thumb" aria-hidden="true"></span>
+            </button>
+          </div>
+          <span class="display-toggle-label" id="labelTonalCorr">Aplikovat penalizaci za tónový hluk</span>
+          <div class="display-toggle-tip" id="tipTonalCorr" role="tooltip">
+            Sníží hygienické limity o 5 dB. Zapněte, pokud hluk obsahuje výrazný otravný tón (např. hučení na jedné frekvenci z větrání či čerpadla).
+          </div>
+          <span class="visually-hidden" id="descTonalCorr">
+            Sníží hygienické limity o 5 dB. Zapněte, pokud hluk obsahuje výrazný otravný tón (např. hučení na jedné frekvenci z větrání či čerpadla).
+          </span>
+        </div>
+      </div>
+      <div class="status" id="status" title="Stav připojení">
+        <span class="dot" id="onlineDot"></span>
+        <span id="onlineLabel" hidden></span>
+      </div>
     </div>
   </header>
 
@@ -182,6 +231,6 @@
     </div>
   </footer>
 
-  <script src="/static/app.js?v=46"></script>
+  <script src="/static/app.js?v=49"></script>
 </body>
 </html>

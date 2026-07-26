@@ -57,6 +57,39 @@ const CHART_SPEC_HEIGHT = 288;
 /** Spektrogram pod hlavním grafem jen pro rozsah ≤ 24 h. */
 const CHART_SPEC_MAX_HOURS = 24;
 
+const LS_WINDOW_CORR = "hlk.corr.window";
+const LS_TONAL_CORR = "hlk.corr.tonal";
+
+function readLsBool(key, defaultOn = true) {
+  try {
+    const v = localStorage.getItem(key);
+    if (v === null) return defaultOn;
+    return v === "1";
+  } catch (_) {
+    return defaultOn;
+  }
+}
+
+function writeLsBool(key, on) {
+  try {
+    localStorage.setItem(key, on ? "1" : "0");
+  } catch (_) {
+    /* ignore */
+  }
+}
+
+function readDisplayConfig() {
+  const cfg = window.__DISPLAY_CONFIG || {};
+  const windowDb = Number(cfg.window_correction_db);
+  const tonalDb = Number(cfg.tonal_penalty_db);
+  return {
+    windowDb: Number.isFinite(windowDb) ? windowDb : 3,
+    tonalDb: Number.isFinite(tonalDb) ? tonalDb : 5,
+  };
+}
+
+const _displayCfg = readDisplayConfig();
+
 const state = {
   threshold: 45,
   period: "day",
@@ -81,6 +114,15 @@ const state = {
   /** Pevný začátek okna grafu (unix s), když chartLive=false. */
   chartStart: null,
   chartPanning: false,
+  /** Display-only korekce (neovlivní API/DB). */
+  display: {
+    windowCorr: readLsBool(LS_WINDOW_CORR, true),
+    tonalPenalty: readLsBool(LS_TONAL_CORR, false),
+    windowDb: _displayCfg.windowDb,
+    tonalDb: _displayCfg.tonalDb,
+  },
+  lastLatest: null,
+  lastHistory: null,
 };
 
 const CHART_MAX_LOOKBACK_S = 90 * 24 * 3600;
@@ -176,6 +218,221 @@ function fmtPct(v) {
   return `${Number(v).toFixed(0)} %`;
 }
 
+function windowOffset() {
+  return state.display.windowCorr ? state.display.windowDb : 0;
+}
+
+function applyWindow(v) {
+  if (v == null || Number.isNaN(Number(v))) return v;
+  return Number(v) - windowOffset();
+}
+
+function setConnectionStatus(online, offlineText) {
+  const dot = $("onlineDot");
+  const label = $("onlineLabel");
+  const status = $("status");
+  if (dot) dot.className = `dot ${online ? "on" : "off"}`;
+  if (label) {
+    if (online) {
+      label.textContent = "";
+      label.hidden = true;
+    } else {
+      label.textContent = offlineText || "offline / bez dat";
+      label.hidden = false;
+    }
+  }
+  if (status) {
+    const msg = online ? "Online" : label?.textContent || "Offline";
+    status.title = msg;
+    status.setAttribute("aria-label", msg);
+  }
+}
+
+function effectiveLimit(rawLimit) {
+  if (rawLimit == null || Number.isNaN(Number(rawLimit))) return rawLimit;
+  if (state.display.tonalPenalty) {
+    return Number(rawLimit) - state.display.tonalDb;
+  }
+  return Number(rawLimit);
+}
+
+function thresholdAtTime(limitPts, tSec) {
+  if (!limitPts?.length) return state.threshold;
+  let v = limitPts[0].v;
+  for (const p of limitPts) {
+    if (p.t <= tSec) v = p.v;
+    else break;
+  }
+  return v;
+}
+
+function syncDisplayToggleUi() {
+  const sw = $("switchWindow");
+  const st = $("switchTonal");
+  if (sw) sw.setAttribute("aria-checked", state.display.windowCorr ? "true" : "false");
+  if (st) st.setAttribute("aria-checked", state.display.tonalPenalty ? "true" : "false");
+
+  const wDb = state.display.windowDb;
+  const tDb = state.display.tonalDb;
+  const windowTip =
+    `Odečte od naměřených hodnot ${wDb} dB. Zvuk přímo u zdi je silnější kvůli odrazu od skla a fasády. ` +
+    `Tímto získáte reálnou hladinu hluku ve volném prostoru 2 metry před oknem.`;
+  const tonalTip =
+    `Sníží hygienické limity o ${tDb} dB. Zapněte, pokud hluk obsahuje výrazný otravný tón ` +
+    `(např. hučení na jedné frekvenci z větrání či čerpadla).`;
+  const tipW = $("tipWindowCorr");
+  const tipT = $("tipTonalCorr");
+  const descW = $("descWindowCorr");
+  const descT = $("descTonalCorr");
+  if (tipW) tipW.textContent = windowTip;
+  if (descW) descW.textContent = windowTip;
+  if (tipT) tipT.textContent = tonalTip;
+  if (descT) descT.textContent = tonalTip;
+}
+
+function setDisplayToggle(kind, on) {
+  if (kind === "window") {
+    state.display.windowCorr = !!on;
+    writeLsBool(LS_WINDOW_CORR, state.display.windowCorr);
+  } else if (kind === "tonal") {
+    state.display.tonalPenalty = !!on;
+    writeLsBool(LS_TONAL_CORR, state.display.tonalPenalty);
+  }
+  syncDisplayToggleUi();
+  applyLatestDisplay();
+  applyHistoryDisplay({ refetchSpec: false });
+}
+
+function applyLatestDisplay() {
+  const data = state.lastLatest;
+  if (!data) return;
+
+  state.threshold = data.alert_threshold_dba ?? state.threshold;
+  state.period = data.alert_period ?? state.period;
+
+  const online = Boolean(data.online);
+  setConnectionStatus(online);
+
+  const live = data.metrics?.laeq_1s;
+  const bands = data.spectrum?.bands || null;
+  const lim = effectiveLimit(state.threshold);
+
+  if (live) {
+    const shown = applyWindow(live.value);
+    const txt = fmtDb(shown);
+    document.querySelectorAll(".js-live-level").forEach((el) => {
+      el.textContent = txt;
+      setLevelClass(el, shown, lim);
+    });
+    const age = Math.max(0, Math.round(Date.now() / 1000 - live.ts));
+    setAllText(".js-live-meta", fmtAge(age));
+    updateOverLimit(shown, lim);
+  } else {
+    updateOverLimit(null, lim);
+  }
+
+  state.liveSpectrum = data.spectrum || null;
+  renderAnalysis(data.analysis || data.spectrum);
+  renderSpectrumBars(bands);
+}
+
+function mapBandsWindow(bands) {
+  if (!bands) return bands;
+  const off = windowOffset();
+  if (!off) return bands;
+  return bands.map((b) => ({
+    ...b,
+    value: b.value == null || Number.isNaN(Number(b.value)) ? b.value : Number(b.value) - off,
+  }));
+}
+
+function computeDisplayStats(points, limitPts) {
+  if (!points?.length) {
+    return { avg: null, min: null, max: null, above_threshold_pct: null };
+  }
+  let sum = 0;
+  let min = Infinity;
+  let max = -Infinity;
+  let above = 0;
+  let n = 0;
+  for (const p of points) {
+    if (p.v == null || Number.isNaN(Number(p.v))) continue;
+    const level = applyWindow(p.v);
+    const lim = effectiveLimit(thresholdAtTime(limitPts, p.t));
+    sum += level;
+    if (level < min) min = level;
+    if (level > max) max = level;
+    if (level > lim) above += 1;
+    n += 1;
+  }
+  if (!n) return { avg: null, min: null, max: null, above_threshold_pct: null };
+  return {
+    avg: sum / n,
+    min,
+    max,
+    above_threshold_pct: (100 * above) / n,
+  };
+}
+
+function applyHistoryDisplay({ refetchSpec = true } = {}) {
+  const data = state.lastHistory;
+  if (!data || !state.chart) return;
+
+  state.threshold = data.threshold_dba ?? state.threshold;
+  state.period = data.alert_period ?? state.period;
+  state.nightBands = data.night_bands || [];
+  state.weatherTimeline = data.weather_timeline || [];
+  state.aircraftOverflights = data.aircraft_overflights || [];
+  setAircraftUiVisible(data.aircraft?.show_ui !== false);
+  if (
+    state.aircraftPopupId != null &&
+    !state.aircraftOverflights.some((a) => a.id === state.aircraftPopupId)
+  ) {
+    closeAircraftPopup();
+  }
+
+  const rawPoints = data.points || [];
+  const limitPts = data.threshold_points || [];
+
+  state.chart.data.datasets[0].data = rawPoints.map((p) => ({
+    x: p.t * 1000,
+    y: applyWindow(p.v),
+  }));
+
+  state.chart.data.datasets[1].data = limitPts.map((p) => ({
+    x: p.t * 1000,
+    y: effectiveLimit(p.v),
+  }));
+  state.chartTooltipKey = null;
+
+  const range = selectedHistoryRange();
+  if (state.chartLive && data.start != null) {
+    state.chartStart = null;
+  } else if (!state.chartLive && data.start != null) {
+    state.chartStart = data.start;
+  }
+  applyHistoryTimeRange(range.t0, range.t1, range.hours);
+
+  const needRecompute = state.display.windowCorr || state.display.tonalPenalty;
+  const s = needRecompute
+    ? computeDisplayStats(rawPoints, limitPts)
+    : data.stats || {};
+  $("statAvg").textContent = s.avg != null ? `${fmtDb(s.avg)} dBA` : "—";
+  $("statMin").textContent = s.min != null ? `${fmtDb(s.min)} dBA` : "—";
+  $("statMax").textContent = s.max != null ? `${fmtDb(s.max)} dBA` : "—";
+  $("statAbove").textContent = fmtPct(s.above_threshold_pct);
+
+  syncDisplayToggleUi();
+  if (refetchSpec) {
+    refreshChartSpectrogram();
+  } else {
+    drawChartSpectrogram();
+    renderChartAxisLabels();
+    if (state.hoverTs != null) showChartCrosshair(state.hoverTs);
+    state.chart.update("none");
+  }
+}
+
 /** Jednotný český 24h formát času (bez AM/PM). */
 const TIME_OPTS = {
   hour: "2-digit",
@@ -218,11 +475,12 @@ function chartTimeFormats(hours) {
   };
 }
 
-function setLevelClass(el, value) {
+function setLevelClass(el, value, limit = null) {
   el.classList.remove("hot", "over");
   if (value == null) return;
-  if (value >= state.threshold + 5) el.classList.add("over");
-  else if (value >= state.threshold) el.classList.add("hot");
+  const lim = limit != null ? limit : state.threshold;
+  if (value >= lim + 5) el.classList.add("over");
+  else if (value >= lim) el.classList.add("hot");
 }
 
 function setAllText(selector, text) {
@@ -238,13 +496,14 @@ function fmtAge(ageSec) {
   return `naposledy před ${Math.round(ageSec / 3600)} h`;
 }
 
-function updateOverLimit(laeq) {
+function updateOverLimit(laeq, limit = null) {
   const periodLabel = state.period === "night" ? "noc" : "den";
   const labels = document.querySelectorAll(".js-over-label");
   const values = document.querySelectorAll(".js-over-value");
   const subs = document.querySelectorAll(".js-over-sub");
+  const lim = limit != null ? limit : effectiveLimit(state.threshold);
 
-  if (laeq == null || state.threshold == null) {
+  if (laeq == null || lim == null) {
     labels.forEach((el) => {
       el.textContent = "Od limitu";
     });
@@ -257,12 +516,15 @@ function updateOverLimit(laeq) {
     });
     return;
   }
-  const delta = laeq - state.threshold;
+  const delta = laeq - lim;
   const over = delta >= 0;
   const sign = over ? "+" : "−";
   const label = over ? "Nad limitem" : "Pod limitem";
   const value = `${sign}${Math.abs(delta).toFixed(1)}`;
-  const sub = `dB ${over ? "nad" : "pod"} ${state.threshold.toFixed(0)} dBA (${periodLabel})`;
+  const tonalSuffix = state.display.tonalPenalty
+    ? `, tón −${state.display.tonalDb}`
+    : "";
+  const sub = `dB ${over ? "nad" : "pod"} ${Number(lim).toFixed(0)} dBA (${periodLabel}${tonalSuffix})`;
   labels.forEach((el) => {
     el.textContent = label;
   });
@@ -540,10 +802,13 @@ function initChart() {
               if (ts == null) return "";
               return fmtTime(ts / 1000);
             },
-            label: (ctx) =>
-              ctx.dataset.label === "limit"
-                ? `limit ${ctx.parsed.y.toFixed(1)} dBA`
-                : `${ctx.parsed.y.toFixed(1)} dBA`,
+            label: (ctx) => {
+              if (ctx.dataset.label === "limit") {
+                const tonal = state.display.tonalPenalty ? " (tón)" : "";
+                return `limit ${ctx.parsed.y.toFixed(1)} dBA${tonal}`;
+              }
+              return `${ctx.parsed.y.toFixed(1)} dBA`;
+            },
           },
         },
       },
@@ -562,8 +827,8 @@ function renderAnalysis(analysis) {
     setAllText(".js-m-dom-unit", "oktávové pásmo");
     return;
   }
-  setAllText(".js-m-total", fmtDb(analysis.leq_total_db));
-  setAllText(".js-m-lfi", fmtDb(analysis.lfi_db));
+  setAllText(".js-m-total", fmtDb(applyWindow(analysis.leq_total_db)));
+  setAllText(".js-m-lfi", fmtDb(applyWindow(analysis.lfi_db)));
   setAllText(".js-m-dom", analysis.dominant_label || "—");
 
   const ratio =
@@ -574,9 +839,10 @@ function renderAnalysis(analysis) {
   const lfiUnit = `dB · 20–200 Hz${ratio}${lfiSrc}`;
   const leqSrc =
     analysis.leq_source === "esp" ? "dB · LZeq (ESP)" : "dB · součet pásem";
+  const domDb = applyWindow(analysis.dominant_db);
   const domUnit =
     analysis.dominant_db != null
-      ? `${fmtDb(analysis.dominant_db)} dB · střed ${analysis.dominant_hz} Hz`
+      ? `${fmtDb(domDb)} dB · střed ${analysis.dominant_hz} Hz`
       : "oktávové pásmo";
 
   setAllText(".js-m-total-unit", leqSrc);
@@ -633,39 +899,16 @@ function renderSpectrumBars(bands) {
     return;
   }
   delete root.dataset.empty;
-  root.innerHTML = spectrumBarsHtml(bands);
+  root.innerHTML = spectrumBarsHtml(mapBandsWindow(bands));
 }
 
 async function refreshLatest() {
   try {
     const data = await fetchJson("/api/v1/latest");
-    state.threshold = data.alert_threshold_dba ?? 45;
-    state.period = data.alert_period ?? "day";
-
-    const online = Boolean(data.online);
-    $("onlineDot").className = `dot ${online ? "on" : "off"}`;
-    $("onlineLabel").textContent = online ? "online" : "offline / bez dat";
-
-    const live = data.metrics?.laeq_1s;
-    if (live) {
-      const txt = fmtDb(live.value);
-      document.querySelectorAll(".js-live-level").forEach((el) => {
-        el.textContent = txt;
-        setLevelClass(el, live.value);
-      });
-      const age = Math.max(0, Math.round(Date.now() / 1000 - live.ts));
-      setAllText(".js-live-meta", fmtAge(age));
-      updateOverLimit(live.value);
-    } else {
-      updateOverLimit(null);
-    }
-
-    state.liveSpectrum = data.spectrum || null;
-    renderAnalysis(data.analysis || data.spectrum);
-    renderSpectrumBars(state.liveSpectrum?.bands);
+    state.lastLatest = data;
+    applyLatestDisplay();
   } catch (err) {
-    $("onlineDot").className = "dot off";
-    $("onlineLabel").textContent = "API nedostupné";
+    setConnectionStatus(false, "API nedostupné");
     console.error(err);
   }
 }
@@ -879,10 +1122,11 @@ function showSpecTooltip(tsSec, _lineLeft) {
   state.specTooltipColTs = col.t;
 
   const labels = state.chartSpectrogram?.labels || SPECTRUM_FALLBACK;
+  const off = windowOffset();
   const bands = col.v.map((v, i) => ({
     band: SPECTRUM_BAND_IDS[i] || "",
     label: labels[i] || SPECTRUM_FALLBACK[i] || "",
-    value: v,
+    value: v == null || Number.isNaN(Number(v)) ? v : Number(v) - off,
   }));
   const { vmin, vmax, span } = spectrumStats(bands);
   const topFirst = [...bands].reverse();
@@ -1018,8 +1262,8 @@ function drawChartSpectrogram() {
       .join("");
   }
 
-  const vmin = data.vmin ?? 20;
-  const vmax = Math.max(vmin + 8, data.vmax ?? 60);
+  const vmin = (data.vmin ?? 20) - windowOffset();
+  const vmax = Math.max(vmin + 8, (data.vmax ?? 60) - windowOffset());
   const vSpan = vmax - vmin;
   const rowH = h / nBands;
 
@@ -1029,6 +1273,7 @@ function drawChartSpectrogram() {
   // Šířka sloupce podle hustoty v okně (min 1 px).
   const inView = cols.filter((c) => c.t >= t0 - span * 0.02 && c.t <= t1 + span * 0.02);
   const colW = Math.max(1, w / Math.max(1, inView.length));
+  const off = windowOffset();
 
   for (const col of inView) {
     const x = ((col.t - t0) / span) * w;
@@ -1036,7 +1281,9 @@ function drawChartSpectrogram() {
     const vals = col.v || [];
     for (let b = 0; b < nBands; b++) {
       const row = nBands - 1 - b;
-      const t = ((vals[b] ?? vmin) - vmin) / vSpan;
+      const raw = vals[b] ?? data.vmin ?? 20;
+      const shown = Number(raw) - off;
+      const t = (shown - vmin) / vSpan;
       ctx.fillStyle = dbToColor(t);
       ctx.fillRect(
         Math.floor(x - colW / 2),
@@ -1066,6 +1313,7 @@ async function refreshChartSpectrogram() {
   if (!chartSpecEnabled()) {
     state.chartSpectrogram = null;
     drawChartSpectrogram();
+    syncDisplayToggleUi();
     if (state.hoverTs == null) hideSpecTooltip();
     return;
   }
@@ -1081,6 +1329,7 @@ async function refreshChartSpectrogram() {
     state.specTooltipColTs = null;
     drawChartSpectrogram();
     renderChartAxisLabels();
+    syncDisplayToggleUi();
     if (state.hoverTs != null) {
       showChartCrosshair(state.hoverTs);
     }
@@ -1222,49 +1471,8 @@ async function refreshHistory() {
     if (start != null) url += `&start=${encodeURIComponent(start)}`;
     const data = await fetchJson(url);
     if (reqId !== state.historyReqId) return;
-
-    state.threshold = data.threshold_dba ?? state.threshold;
-    state.period = data.alert_period ?? state.period;
-    state.nightBands = data.night_bands || [];
-    state.weatherTimeline = data.weather_timeline || [];
-    state.aircraftOverflights = data.aircraft_overflights || [];
-    setAircraftUiVisible(data.aircraft?.show_ui !== false);
-    if (
-      state.aircraftPopupId != null &&
-      !state.aircraftOverflights.some((a) => a.id === state.aircraftPopupId)
-    ) {
-      closeAircraftPopup();
-    }
-
-    const points = (data.points || []).map((p) => ({
-      x: p.t * 1000,
-      y: p.v,
-    }));
-    state.chart.data.datasets[0].data = points;
-
-    const limitPts = data.threshold_points || [];
-    state.chart.data.datasets[1].data = limitPts.map((p) => ({
-      x: p.t * 1000,
-      y: p.v,
-    }));
-    state.chartTooltipKey = null;
-
-    // Rozsah z selectu / panu — spektrogram má vlastní ovládání.
-    const range = selectedHistoryRange();
-    if (state.chartLive && data.start != null) {
-      // držet chartStart v synchronu i v live (pro plynulý přechod do panu)
-      state.chartStart = null;
-    } else if (!state.chartLive && data.start != null) {
-      state.chartStart = data.start;
-    }
-    applyHistoryTimeRange(range.t0, range.t1, range.hours);
-    refreshChartSpectrogram();
-
-    const s = data.stats || {};
-    $("statAvg").textContent = s.avg != null ? `${fmtDb(s.avg)} dBA` : "—";
-    $("statMin").textContent = s.min != null ? `${fmtDb(s.min)} dBA` : "—";
-    $("statMax").textContent = s.max != null ? `${fmtDb(s.max)} dBA` : "—";
-    $("statAbove").textContent = fmtPct(s.above_threshold_pct);
+    state.lastHistory = data;
+    applyHistoryDisplay({ refetchSpec: true });
   } catch (err) {
     if (reqId === state.historyReqId) console.error(err);
   }
@@ -1433,6 +1641,7 @@ function bind() {
     }
     const { t0, t1, hours } = selectedHistoryRange();
     applyHistoryTimeRange(t0, t1, hours);
+    syncDisplayToggleUi();
     refreshHistory();
   });
   $("metricSelect").addEventListener("change", refreshHistory);
@@ -1442,6 +1651,8 @@ function bind() {
     applyHistoryTimeRange(t0, t1, hours);
     refreshHistory();
   });
+
+  bindDisplayToggles();
 
   const aircraftRow = $("aircraftTimeline");
   aircraftRow?.addEventListener("click", (ev) => {
@@ -1493,6 +1704,7 @@ function bind() {
 
 initChart();
 bind();
+syncDisplayToggleUi();
 setChartLive(true);
 refreshLatest();
 refreshHistory();
@@ -1502,3 +1714,98 @@ setInterval(refreshLatest, 2000);
 setInterval(() => {
   if (state.chartLive && !state.chartPanning) refreshHistory();
 }, 15000);
+
+function bindDisplayToggles() {
+  const LONG_MS = 520;
+  document.querySelectorAll(".display-toggle").forEach((row) => {
+    const btn = row.querySelector(".pill-switch");
+    if (!btn) return;
+    const kind = row.getAttribute("data-switch");
+    let pressTimer = null;
+    let longPress = false;
+    let pointerId = null;
+
+    const clearPress = () => {
+      if (pressTimer != null) {
+        clearTimeout(pressTimer);
+        pressTimer = null;
+      }
+    };
+
+    const closeTip = () => row.classList.remove("is-tip-open");
+    const openTip = () => {
+      document.querySelectorAll(".display-toggle.is-tip-open").forEach((w) => {
+        if (w !== row) w.classList.remove("is-tip-open");
+      });
+      row.classList.add("is-tip-open");
+    };
+
+    btn.addEventListener("keydown", (ev) => {
+      if (ev.key !== " " && ev.key !== "Enter") return;
+      ev.preventDefault();
+      const next = btn.getAttribute("aria-checked") !== "true";
+      setDisplayToggle(kind, next);
+    });
+
+    btn.addEventListener("pointerdown", (ev) => {
+      if (ev.button != null && ev.button !== 0) return;
+      longPress = false;
+      pointerId = ev.pointerId;
+      clearPress();
+      pressTimer = setTimeout(() => {
+        longPress = true;
+        openTip();
+      }, LONG_MS);
+      try {
+        btn.setPointerCapture(ev.pointerId);
+      } catch (_) {
+        /* ignore */
+      }
+    });
+
+    const endPress = (ev) => {
+      if (pointerId != null && ev.pointerId !== pointerId) return;
+      clearPress();
+      try {
+        if (pointerId != null) btn.releasePointerCapture(pointerId);
+      } catch (_) {
+        /* ignore */
+      }
+      pointerId = null;
+      if (longPress) return;
+      const next = btn.getAttribute("aria-checked") !== "true";
+      setDisplayToggle(kind, next);
+    };
+
+    btn.addEventListener("pointerup", endPress);
+    btn.addEventListener("pointercancel", () => {
+      clearPress();
+      pointerId = null;
+      longPress = false;
+    });
+
+    // Long-press na titulku = info (bez přepnutí)
+    const label = row.querySelector(".display-toggle-label");
+    label?.addEventListener("pointerdown", (ev) => {
+      if (ev.button != null && ev.button !== 0) return;
+      clearPress();
+      pressTimer = setTimeout(() => {
+        openTip();
+      }, LONG_MS);
+    });
+    label?.addEventListener("pointerup", clearPress);
+    label?.addEventListener("pointerleave", clearPress);
+    label?.addEventListener("pointercancel", clearPress);
+
+    row.addEventListener("mouseleave", () => {
+      if (!row.matches(":hover")) closeTip();
+    });
+  });
+
+  document.addEventListener("pointerdown", (ev) => {
+    const open = document.querySelector(".display-toggle.is-tip-open");
+    if (!open) return;
+    if (open.contains(ev.target)) return;
+    open.classList.remove("is-tip-open");
+  });
+}
