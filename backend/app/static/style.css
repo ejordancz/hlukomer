@@ -971,6 +971,14 @@ main {
   height: 1.35rem;
 }
 
+.aircraft-timeline[hidden] {
+  display: none;
+}
+
+.chart-legend-item[hidden] {
+  display: none;
+}
+
 .aircraft-slot {
   position: absolute;
   top: 0;

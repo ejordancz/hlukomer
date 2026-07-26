@@ -58,7 +58,6 @@ ALERT_DAY_END_HOUR = int(os.getenv("ALERT_DAY_END_HOUR", "22"))
 TZ_NAME = os.getenv("TZ", "Europe/Prague")
 TZ = ZoneInfo(TZ_NAME)
 RETENTION_DAYS = storage.RETENTION_DAYS
-LIVE_RETENTION_DAYS = storage.LIVE_RETENTION_DAYS
 
 STATIC_DIR = Path(__file__).parent / "static"
 
@@ -145,8 +144,6 @@ LEGACY_SPECTRUM_BANDS: tuple[str, ...] = (
     "16k",
 )
 LEGACY_SPECTRUM_METRICS: tuple[str, ...] = tuple(f"oct_{b}" for b in LEGACY_SPECTRUM_BANDS)
-
-LIVE_METRICS = storage.LIVE_METRICS_EAV
 
 app = FastAPI(title="Hlukoměr", version="1.2.0")
 
@@ -506,32 +503,6 @@ def ensure_db() -> None:
         )
         storage.ensure_wide_tables(conn)
         _migrate_aircraft_columns(conn)
-        eav_status = storage.get_meta(conn, storage.META_STATUS, "")
-        if eav_status != "dropped":
-            conn.executescript(
-                """
-                CREATE TABLE IF NOT EXISTS measurements (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    ts REAL NOT NULL,
-                    device_id TEXT NOT NULL,
-                    kind TEXT NOT NULL,
-                    metric TEXT NOT NULL,
-                    value REAL NOT NULL
-                );
-                CREATE INDEX IF NOT EXISTS idx_meas_ts_metric
-                    ON measurements(metric, ts);
-                CREATE INDEX IF NOT EXISTS idx_meas_device_ts
-                    ON measurements(device_id, ts);
-                """
-            )
-            n = conn.execute("SELECT COUNT(*) AS n FROM measurements").fetchone()["n"]
-            if int(n or 0) == 0 and eav_status in ("", "pending"):
-                storage.set_meta(conn, storage.META_STATUS, "done")
-        else:
-            # Po dropu EAV — wide je zdroj pravdy
-            pass
-        if eav_status == "" and not storage.table_exists(conn, "measurements"):
-            storage.set_meta(conn, storage.META_STATUS, "done")
 
 
 def _migrate_aircraft_columns(conn: sqlite3.Connection) -> None:
@@ -1107,7 +1078,7 @@ def fetch_spectrum(conn: sqlite3.Connection, device_id: str) -> Optional[dict[st
             if row[metric] is not None:
                 values[i] = float(row[metric])
     else:
-        # EAV / cold fallback per band
+        # cold fallback per band (samples_5s přes latest_metric)
         for i, metric in enumerate(SPECTRUM_METRICS):
             got = storage.latest_metric(conn, device_id, metric)
             if got:
@@ -1142,44 +1113,7 @@ def fetch_spectrum_at(
     """Spektrum nejbližší k ts (pro FFT okamžiku)."""
     row = storage.nearest_sample(conn, device_id, ts, tolerance=tolerance)
     if row is None:
-        # EAV fallback
-        values: list[Optional[float]] = [None] * len(SPECTRUM_METRICS)
-        used_ts: Optional[float] = None
-        for i, metric in enumerate(SPECTRUM_METRICS):
-            if not storage.table_exists(conn, "measurements"):
-                return None
-            erow = conn.execute(
-                """
-                SELECT ts, value FROM measurements
-                WHERE device_id = ? AND metric = ? AND ts BETWEEN ? AND ?
-                ORDER BY ABS(ts - ?) ASC LIMIT 1
-                """,
-                (device_id, metric, ts - tolerance, ts + tolerance, ts),
-            ).fetchone()
-            if not erow:
-                return None
-            values[i] = float(erow["value"])
-            used_ts = float(erow["ts"]) if used_ts is None else used_ts
-        if any(v is None for v in values) or used_ts is None:
-            return None
-
-        def near(metric: str) -> Optional[float]:
-            r = conn.execute(
-                """
-                SELECT value FROM measurements
-                WHERE device_id = ? AND metric = ? AND ts BETWEEN ? AND ?
-                ORDER BY ABS(ts - ?) ASC LIMIT 1
-                """,
-                (device_id, metric, used_ts - tolerance, used_ts + tolerance, used_ts),
-            ).fetchone()
-            return float(r["value"]) if r else None
-
-        analysis = analyze_spectrum(
-            [float(v) for v in values],  # type: ignore[arg-type]
-            lez_1s=near("lez_1s"),
-            lfi_db_direct=near("lfi_db"),
-        )
-        return {"ts": used_ts, **analysis}
+        return None
 
     values_f = [float(row[m]) for m in SPECTRUM_METRICS if row[m] is not None]
     if len(values_f) != len(SPECTRUM_METRICS):
@@ -1193,26 +1127,6 @@ def fetch_spectrum_at(
         lfi_db_direct=lfi_direct,
     )
     return {"ts": used_ts, **analysis}
-
-
-def pivot_spectrum_rows(
-    rows: list[sqlite3.Row],
-    max_columns: int,
-    metrics: tuple[str, ...] = SPECTRUM_METRICS,
-) -> tuple[list[dict[str, Any]], Optional[float], Optional[float]]:
-    """Seskupí řádky metric/ts/value do sloupců spectrogramu (EAV legacy)."""
-    by_ts: dict[float, dict[str, float]] = {}
-    for r in rows:
-        bucket = by_ts.setdefault(r["ts"], {})
-        bucket[r["metric"]] = float(r["value"])
-
-    complete: list[tuple[float, list[float]]] = []
-    for ts in sorted(by_ts):
-        band_map = by_ts[ts]
-        if not all(m in band_map for m in metrics):
-            continue
-        complete.append((ts, [band_map[m] for m in metrics]))
-    return downsample_spectrum_columns(complete, max_columns)
 
 
 def downsample_spectrum_columns(
@@ -1459,9 +1373,12 @@ def history(
         "night_bands": night_bands,
         "sun": {"source": sun_source},
         "weather_timeline": fetch_weather_timeline(t_start, t_end, hours),
-        "aircraft_overflights": fetch_aircraft_overflights(t_start, t_end),
+        "aircraft_overflights": (
+            fetch_aircraft_overflights(t_start, t_end) if ac_cfg.show_ui else []
+        ),
         "aircraft": {
             "enabled": ac_cfg.enabled,
+            "show_ui": ac_cfg.show_ui,
             "source": "opensky",
             "max_altitude_m": ac_cfg.max_altitude_m,
             "max_distance_km": ac_cfg.max_distance_km,
@@ -1507,31 +1424,6 @@ def health() -> dict[str, str]:
 def admin_storage(_: None = Depends(require_admin_session)) -> dict[str, Any]:
     with db() as conn:
         return storage.storage_status(conn)
-
-
-@app.post("/api/admin/storage/verify")
-def admin_storage_verify(_: None = Depends(require_admin_session)) -> dict[str, Any]:
-    with db() as conn:
-        status = storage.get_meta(conn, storage.META_STATUS, "")
-        if status == "migrating":
-            raise HTTPException(status_code=409, detail="Migrace ještě běží")
-        if status not in ("migrated", "verified"):
-            # doběhni zbývající chunky synchronně (max ~30 s)
-            deadline = time.time() + 30
-            while time.time() < deadline:
-                r = storage.migrate_eav_chunk(conn, batch_size=5000)
-                if r.get("done"):
-                    break
-        return storage.auto_verify_migration(conn)
-
-
-@app.post("/api/admin/storage/drop-eav")
-def admin_storage_drop_eav(_: None = Depends(require_admin_session)) -> dict[str, Any]:
-    with db() as conn:
-        result = storage.drop_eav_table(conn)
-    if not result.get("ok"):
-        raise HTTPException(status_code=409, detail=result.get("error", "drop failed"))
-    return result
 
 
 @app.post("/api/admin/storage/vacuum")

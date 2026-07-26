@@ -1,4 +1,4 @@
-"""Wide storage (samples_1s / samples_5s / samples_minute) + EAV migrace + hot/cold."""
+"""Wide storage (samples_1s / samples_5s / samples_minute) + hot/cold archive."""
 
 from __future__ import annotations
 
@@ -13,8 +13,6 @@ from typing import Any, Callable, Optional
 logger = logging.getLogger("hlukomer.storage")
 
 RETENTION_DAYS = int(os.getenv("RETENTION_DAYS", "90"))
-# LIVE_RETENTION_DAYS deprecated — mapováno jen pro EAV prune během migrace
-LIVE_RETENTION_DAYS = int(os.getenv("LIVE_RETENTION_DAYS", "7"))
 HOT_RETENTION_HOURS = float(os.getenv("HOT_RETENTION_HOURS", "48"))
 ARCHIVE_INTERVAL_S = int(os.getenv("ARCHIVE_INTERVAL_S", "5"))
 if ARCHIVE_INTERVAL_S not in (5, 10):
@@ -23,8 +21,6 @@ if ARCHIVE_INTERVAL_S not in (5, 10):
     )
     ARCHIVE_INTERVAL_S = 5
 ARCHIVE_JOB_INTERVAL_S = int(os.getenv("ARCHIVE_JOB_INTERVAL_S", "300"))
-MIGRATE_EAV_ON_STARTUP = os.getenv("MIGRATE_EAV_ON_STARTUP", "1") == "1"
-VACUUM_AFTER_MIGRATE = os.getenv("VACUUM_AFTER_MIGRATE", "0") == "1"
 
 SPECTRUM_BANDS: tuple[str, ...] = (
     "25",
@@ -46,38 +42,16 @@ SPECTRUM_BANDS: tuple[str, ...] = (
     "16k",
 )
 SPECTRUM_COLS: tuple[str, ...] = tuple(f"oct_{b}" for b in SPECTRUM_BANDS)
-LEGACY_SPECTRUM_BANDS: tuple[str, ...] = (
-    "31",
-    "63",
-    "125",
-    "250",
-    "500",
-    "1k",
-    "2k",
-    "4k",
-    "8k",
-    "16k",
-)
-LEGACY_SPECTRUM_COLS: tuple[str, ...] = tuple(
-    f"oct_{b}" for b in LEGACY_SPECTRUM_BANDS
-)
 
 LIVE_VALUE_COLS: tuple[str, ...] = ("laeq_1s", "lez_1s", "lfi_db", *SPECTRUM_COLS)
 MINUTE_COLS: tuple[str, ...] = ("laeq_1min", "lamax_1min", "lamin_1min")
 
-LIVE_METRICS_EAV = frozenset(
-    {"laeq_1s", "lez_1s", "lfi_db", *SPECTRUM_COLS, *LEGACY_SPECTRUM_COLS}
-)
-
-META_STATUS = "eav_migration_status"
-META_CURSOR = "eav_migration_cursor_ts"
 META_ARCHIVE_RUN = "archive_last_run"
 
 _COL_LIST_1S = ", ".join(("ts", "device_id", *LIVE_VALUE_COLS))
 _COL_LIST_5S = ", ".join(("ts", "device_id", *LIVE_VALUE_COLS, "n_src"))
 _COL_LIST_MIN = ", ".join(("ts", "device_id", *MINUTE_COLS))
 
-_migrate_thread: Optional[threading.Thread] = None
 _archive_thread: Optional[threading.Thread] = None
 _stop = threading.Event()
 _DbFactory = Callable[[], Any]
@@ -303,18 +277,6 @@ def latest_metric(
         ).fetchone()
         if row:
             return float(row["ts"]), float(row["value"])
-    # EAV fallback během migrace
-    if table_exists(conn, "measurements"):
-        row = conn.execute(
-            """
-            SELECT ts, value FROM measurements
-            WHERE device_id = ? AND metric = ?
-            ORDER BY ts DESC LIMIT 1
-            """,
-            (device_id, metric),
-        ).fetchone()
-        if row:
-            return float(row["ts"]), float(row["value"])
     return None
 
 
@@ -357,13 +319,6 @@ def max_ts(conn: sqlite3.Connection, device_id: str) -> Optional[float]:
         ).fetchone()
         if row and row["ts"] is not None:
             candidates.append(float(row["ts"]))
-    if table_exists(conn, "measurements"):
-        row = conn.execute(
-            "SELECT MAX(ts) AS ts FROM measurements WHERE device_id = ?",
-            (device_id,),
-        ).fetchone()
-        if row and row["ts"] is not None:
-            candidates.append(float(row["ts"]))
     return max(candidates) if candidates else None
 
 
@@ -374,7 +329,7 @@ def fetch_metric_points(
     t_start: float,
     t_end: float,
 ) -> list[dict[str, float]]:
-    """Body {t, v} pro graf — wide (+ EAV fallback)."""
+    """Body {t, v} pro graf z wide tabulek."""
     by_ts: dict[float, float] = {}
 
     if metric in LIVE_VALUE_COLS:
@@ -418,26 +373,6 @@ def fetch_metric_points(
         for r in rows:
             by_ts[float(r["ts"])] = float(r["value"])
 
-    status = get_meta(conn, META_STATUS, "")
-    if (
-        table_exists(conn, "measurements")
-        and status not in ("dropped",)
-        and metric in (LIVE_METRICS_EAV | frozenset(MINUTE_COLS))
-    ):
-        # Doplň mezery z EAV (během migrace)
-        rows = conn.execute(
-            """
-            SELECT ts, value FROM measurements
-            WHERE device_id = ? AND metric = ? AND ts >= ? AND ts <= ?
-            ORDER BY ts ASC
-            """,
-            (device_id, metric, t_start, t_end),
-        ).fetchall()
-        for r in rows:
-            t = float(r["ts"])
-            if t not in by_ts:
-                by_ts[t] = float(r["value"])
-
     return [{"t": t, "v": by_ts[t]} for t in sorted(by_ts)]
 
 
@@ -458,7 +393,7 @@ def fetch_spectrum_columns_raw(
     t_end: float,
     metrics: tuple[str, ...] = SPECTRUM_COLS,
 ) -> list[tuple[float, list[float]]]:
-    """Kompletní spektrum řádky (ts, values) z wide (+ EAV fallback)."""
+    """Kompletní spektrum řádky (ts, values) z wide tabulek."""
     cutoff = hot_cutoff()
     by_ts: dict[float, dict[str, float]] = {}
 
@@ -484,24 +419,6 @@ def fetch_spectrum_columns_raw(
 
     absorb_wide("samples_1s")
     absorb_wide("samples_5s", "AND ts < ?", (cutoff,))
-
-    status = get_meta(conn, META_STATUS, "")
-    if table_exists(conn, "measurements") and status != "dropped":
-        placeholders = ",".join("?" * len(metrics))
-        rows = conn.execute(
-            f"""
-            SELECT ts, metric, value FROM measurements
-            WHERE device_id = ? AND metric IN ({placeholders})
-              AND ts >= ? AND ts <= ?
-            ORDER BY ts ASC
-            """,
-            (device_id, *metrics, t_start, t_end),
-        ).fetchall()
-        for r in rows:
-            t = float(r["ts"])
-            if t in by_ts and r["metric"] in by_ts[t]:
-                continue
-            by_ts.setdefault(t, {})[r["metric"]] = float(r["value"])
 
     complete: list[tuple[float, list[float]]] = []
     for ts in sorted(by_ts):
@@ -530,205 +447,11 @@ def metric_stats(
     }
 
 
-# --- migrace EAV → wide -------------------------------------------------
-
-
-def _pivot_eav_batch(
-    conn: sqlite3.Connection,
-    device_id: str,
-    timestamps: list[float],
-) -> None:
-    if not timestamps:
-        return
-    t_min = min(timestamps)
-    t_max = max(timestamps)
-    rows = conn.execute(
-        """
-        SELECT ts, metric, value, kind FROM measurements
-        WHERE device_id = ? AND ts >= ? AND ts <= ?
-        """,
-        (device_id, t_min, t_max),
-    ).fetchall()
-    live: dict[float, dict[str, float]] = {}
-    minute: dict[float, dict[str, float]] = {}
-    wanted = set(timestamps)
-    for r in rows:
-        ts = float(r["ts"])
-        if ts not in wanted:
-            continue
-        metric = str(r["metric"])
-        val = float(r["value"])
-        kind = str(r["kind"])
-        if kind == "minute" or metric in MINUTE_COLS:
-            if metric in MINUTE_COLS:
-                minute.setdefault(ts, {})[metric] = val
-        else:
-            if metric in LIVE_VALUE_COLS or metric in LEGACY_SPECTRUM_COLS:
-                # legacy oct_* mapují na stejné názvy sloupců
-                if metric in LIVE_VALUE_COLS:
-                    live.setdefault(ts, {})[metric] = val
-    for ts, vals in live.items():
-        upsert_sample_1s(conn, ts, device_id, vals)  # type: ignore[arg-type]
-    for ts, vals in minute.items():
-        upsert_minute(conn, ts, device_id, vals)  # type: ignore[arg-type]
-
-
-def migrate_eav_chunk(conn: sqlite3.Connection, batch_size: int = 5000) -> dict[str, Any]:
-    """Zkopíruje další chunk EAV → wide. Restartovatelné přes meta kurzor."""
-    if not table_exists(conn, "measurements"):
-        set_meta(conn, META_STATUS, "done")
-        return {"done": True, "copied": 0, "reason": "no_measurements"}
-
-    status = get_meta(conn, META_STATUS, "pending")
-    if status in ("verified", "dropped", "done"):
-        return {"done": True, "copied": 0, "status": status}
-
-    set_meta(conn, META_STATUS, "migrating")
-    cursor_raw = get_meta(conn, META_CURSOR, "")
-    cursor = float(cursor_raw) if cursor_raw else -1.0
-
-    # Distinct (ts, device_id) after cursor
-    rows = conn.execute(
-        """
-        SELECT ts, device_id FROM measurements
-        WHERE ts > ?
-        GROUP BY ts, device_id
-        ORDER BY ts ASC
-        LIMIT ?
-        """,
-        (cursor, batch_size),
-    ).fetchall()
-    if not rows:
-        set_meta(conn, META_STATUS, "migrated")
-        set_meta(conn, META_CURSOR, str(cursor))
-        return {"done": True, "copied": 0, "status": "migrated"}
-
-    # Group by device
-    by_dev: dict[str, list[float]] = {}
-    max_ts_batch = cursor
-    for r in rows:
-        ts = float(r["ts"])
-        max_ts_batch = max(max_ts_batch, ts)
-        by_dev.setdefault(str(r["device_id"]), []).append(ts)
-
-    copied = 0
-    for device_id, timestamps in by_dev.items():
-        _pivot_eav_batch(conn, device_id, timestamps)
-        copied += len(timestamps)
-
-    set_meta(conn, META_CURSOR, str(max_ts_batch))
-    return {
-        "done": False,
-        "copied": copied,
-        "cursor": max_ts_batch,
-        "status": "migrating",
-    }
-
-
-def auto_verify_migration(conn: sqlite3.Connection) -> dict[str, Any]:
-    """Rychlá kontrola po migraci; při úspěchu status=verified."""
-    if not table_exists(conn, "measurements"):
-        set_meta(conn, META_STATUS, "done")
-        return {"ok": True, "status": "done"}
-
-    status = get_meta(conn, META_STATUS, "")
-    if status in ("verified", "dropped", "done"):
-        # Už ověřeno — nepřepisovat kvůli novému ingestu do wide
-        return {"ok": True, "status": status, "skipped": True}
-    if status not in ("migrated",):
-        return {"ok": False, "status": status, "error": "not_ready"}
-
-    issues: list[str] = []
-    eav_laeq = conn.execute(
-        """
-        SELECT COUNT(*) AS n, MIN(ts) AS tmin, MAX(ts) AS tmax
-        FROM measurements WHERE metric = 'laeq_1s'
-        """
-    ).fetchone()
-    wide_laeq = conn.execute(
-        """
-        SELECT COUNT(*) AS n, MIN(ts) AS tmin, MAX(ts) AS tmax
-        FROM samples_1s WHERE laeq_1s IS NOT NULL
-        """
-    ).fetchone()
-    eav_n = int(eav_laeq["n"] or 0)
-    wide_n = int(wide_laeq["n"] or 0)
-    # Wide smí mít víc řádků (nový ingest po cutoveru)
-    if eav_n and wide_n + 2 < eav_n * 0.999:
-        issues.append(f"laeq_1s count EAV={eav_n} wide={wide_n}")
-
-    if eav_laeq["tmin"] is not None and wide_laeq["tmin"] is not None:
-        if abs(float(eav_laeq["tmin"]) - float(wide_laeq["tmin"])) > 2:
-            issues.append("min ts mismatch")
-        # Wide max smí být novější než EAV (ingest už píše jen wide)
-        if float(wide_laeq["tmax"]) + 2 < float(eav_laeq["tmax"]):
-            issues.append("max ts mismatch (wide behind EAV)")
-
-    # Spot-check 20 náhodných ts z EAV
-    samples = conn.execute(
-        """
-        SELECT ts, device_id FROM measurements
-        WHERE metric = 'laeq_1s'
-        ORDER BY RANDOM() LIMIT 20
-        """
-    ).fetchall()
-    for s in samples:
-        ts = float(s["ts"])
-        device_id = str(s["device_id"])
-        eav_v = conn.execute(
-            """
-            SELECT value FROM measurements
-            WHERE device_id = ? AND metric = 'laeq_1s' AND ts = ?
-            """,
-            (device_id, ts),
-        ).fetchone()
-        wide_v = conn.execute(
-            """
-            SELECT laeq_1s FROM samples_1s
-            WHERE device_id = ? AND ts = ?
-            """,
-            (device_id, ts),
-        ).fetchone()
-        if not eav_v or not wide_v or wide_v["laeq_1s"] is None:
-            issues.append(f"missing wide at ts={ts}")
-            continue
-        if abs(float(eav_v["value"]) - float(wide_v["laeq_1s"])) > 0.01:
-            issues.append(f"value mismatch at ts={ts}")
-
-    if issues:
-        set_meta(conn, META_STATUS, "migrated")
-        return {"ok": False, "status": "migrated", "issues": issues[:10]}
-
-    set_meta(conn, META_STATUS, "verified")
-    return {"ok": True, "status": "verified", "eav_laeq": eav_n, "wide_laeq": wide_n}
-
-
-def drop_eav_table(conn: sqlite3.Connection) -> dict[str, Any]:
-    status = get_meta(conn, META_STATUS, "")
-    if status != "verified":
-        return {"ok": False, "error": f"status must be verified, got {status!r}"}
-    if not table_exists(conn, "measurements"):
-        set_meta(conn, META_STATUS, "dropped")
-        return {"ok": True, "already": True}
-    conn.execute("DROP INDEX IF EXISTS idx_meas_ts_metric")
-    conn.execute("DROP INDEX IF EXISTS idx_meas_device_ts")
-    conn.execute("DROP TABLE IF EXISTS measurements")
-    set_meta(conn, META_STATUS, "dropped")
-    if VACUUM_AFTER_MIGRATE:
-        conn.execute("VACUUM")
-    return {"ok": True, "dropped": True, "vacuum": VACUUM_AFTER_MIGRATE}
-
-
 # --- archive / prune ----------------------------------------------------
 
 
 def rollup_chunk(conn: sqlite3.Connection, limit_buckets: int = 2000) -> dict[str, Any]:
     """Energy-average samples_1s → samples_5s pod hot_cutoff; smaže hot."""
-    status = get_meta(conn, META_STATUS, "done")
-    # Archivovat až po verify / když EAV není / done
-    if status in ("pending", "migrating", "migrated"):
-        return {"skipped": True, "reason": f"migration_status={status}"}
-
     cutoff = hot_cutoff()
     rows = conn.execute(
         f"""
@@ -816,19 +539,6 @@ def prune_storage(
             (aircraft_cutoff,),
         )
 
-    status = get_meta(conn, META_STATUS, "")
-    if table_exists(conn, "measurements") and status not in ("dropped",):
-        # Během migrace nemaž live EAV pod LIVE_RETENTION (ať nepřijdeme o nemigrované).
-        # Mazat jen starší než RETENTION_DAYS.
-        conn.execute("DELETE FROM measurements WHERE ts < ?", (cutoff_all,))
-        if status in ("verified", "done"):
-            cutoff_live = now - LIVE_RETENTION_DAYS * 86400
-            placeholders = ",".join("?" * len(LIVE_METRICS_EAV))
-            conn.execute(
-                f"DELETE FROM measurements WHERE metric IN ({placeholders}) AND ts < ?",
-                (*LIVE_METRICS_EAV, cutoff_live),
-            )
-
 
 def storage_status(conn: sqlite3.Connection) -> dict[str, Any]:
     def count(table: str) -> int:
@@ -838,8 +548,6 @@ def storage_status(conn: sqlite3.Connection) -> dict[str, Any]:
         return int(row["n"] or 0)
 
     return {
-        "migration_status": get_meta(conn, META_STATUS, "pending"),
-        "migration_cursor_ts": get_meta(conn, META_CURSOR, ""),
         "archive_last_run": get_meta(conn, META_ARCHIVE_RUN, ""),
         "hot_retention_hours": HOT_RETENTION_HOURS,
         "archive_interval_s": ARCHIVE_INTERVAL_S,
@@ -848,7 +556,6 @@ def storage_status(conn: sqlite3.Connection) -> dict[str, Any]:
             "samples_1s": count("samples_1s"),
             "samples_5s": count("samples_5s"),
             "samples_minute": count("samples_minute"),
-            "measurements": count("measurements"),
         },
     }
 
@@ -860,44 +567,10 @@ def start_background_jobs(
     db_factory: _DbFactory,
     prune_fn: Optional[Callable[[], None]] = None,
 ) -> None:
-    global _migrate_thread, _archive_thread
+    global _archive_thread
     _stop.clear()
 
-    if MIGRATE_EAV_ON_STARTUP:
-        def migrate_loop() -> None:
-            logger.info("EAV migrace: start")
-            while not _stop.is_set():
-                try:
-                    with db_factory() as conn:
-                        result = migrate_eav_chunk(conn, batch_size=3000)
-                    if result.get("done"):
-                        status = result.get("status") or ""
-                        if status == "migrated":
-                            with db_factory() as conn:
-                                vr = auto_verify_migration(conn)
-                            logger.info("EAV migrace verify: %s", vr)
-                        else:
-                            logger.info("EAV migrace hotova: %s", result)
-                        break
-                    logger.info(
-                        "EAV migrace chunk: copied=%s cursor=%s",
-                        result.get("copied"),
-                        result.get("cursor"),
-                    )
-                except Exception:
-                    logger.exception("EAV migrace selhala")
-                    time.sleep(5)
-                    continue
-                # krátká pauza ať ingest dýchá
-                _stop.wait(0.05)
-
-        _migrate_thread = threading.Thread(
-            target=migrate_loop, name="eav-migrate", daemon=True
-        )
-        _migrate_thread.start()
-
     def archive_loop() -> None:
-        # první běh po krátké pauze (migrace má přednost)
         _stop.wait(15)
         while not _stop.is_set():
             try:

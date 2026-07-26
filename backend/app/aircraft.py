@@ -55,6 +55,7 @@ class Sighting:
 @dataclass(frozen=True)
 class AircraftConfig:
     enabled: bool
+    show_ui: bool
     lat: Optional[float]
     lon: Optional[float]
     max_altitude_m: float
@@ -131,6 +132,8 @@ def get_config() -> AircraftConfig:
     coords = weather_svc.get_coords()
     flag = _env_bool_tri("AIRCRAFT_ENABLED")
     enabled = bool(coords) if flag is None else (flag and bool(coords))
+    show_ui_flag = _env_bool_tri("AIRCRAFT_SHOW_UI")
+    show_ui = True if show_ui_flag is None else show_ui_flag
 
     max_dist = _env_float("AIRCRAFT_MAX_DISTANCE_KM", DEFAULT_MAX_DISTANCE_KM)
     padding_raw = (os.getenv("AIRCRAFT_BBOX_PADDING_KM") or "").strip()
@@ -155,6 +158,7 @@ def get_config() -> AircraftConfig:
 
     return AircraftConfig(
         enabled=enabled,
+        show_ui=show_ui,
         lat=lat,
         lon=lon,
         max_altitude_m=_env_float("AIRCRAFT_MAX_ALTITUDE_M", DEFAULT_MAX_ALTITUDE_M),
@@ -177,6 +181,7 @@ def status_payload() -> dict[str, Any]:
     cfg = get_config()
     return {
         "enabled": cfg.enabled,
+        "show_ui": cfg.show_ui,
         "configured": cfg.lat is not None and cfg.lon is not None,
         "last_poll_at": _status.get("last_poll_at"),
         "last_poll_ok": _status.get("last_poll_ok"),

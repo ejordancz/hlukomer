@@ -66,6 +66,7 @@ const state = {
   weatherTimeline: [],
   chartRange: { t0: 0, t1: 1 },
   aircraftOverflights: [],
+  aircraftShowUi: true,
   aircraftPopupId: null,
   historyReqId: 0,
   chartSpecReqId: 0,
@@ -1088,9 +1089,26 @@ async function refreshChartSpectrogram() {
   }
 }
 
+function setAircraftUiVisible(visible) {
+  state.aircraftShowUi = !!visible;
+  const timeline = $("aircraftTimeline");
+  const legend = $("legendAircraft");
+  if (timeline) timeline.hidden = !state.aircraftShowUi;
+  if (legend) legend.hidden = !state.aircraftShowUi;
+  if (!state.aircraftShowUi) closeAircraftPopup();
+  layoutChartUnderTimelines();
+}
+
 function renderAircraftTimeline() {
   const el = $("aircraftTimeline");
   if (!el) return;
+  if (!state.aircraftShowUi) {
+    el.hidden = true;
+    el.innerHTML = "";
+    layoutChartUnderTimelines();
+    return;
+  }
+  el.hidden = false;
   const { t0, t1 } = state.chartRange;
   const span = Math.max(1e-6, t1 - t0);
   const items = state.aircraftOverflights || [];
@@ -1210,6 +1228,7 @@ async function refreshHistory() {
     state.nightBands = data.night_bands || [];
     state.weatherTimeline = data.weather_timeline || [];
     state.aircraftOverflights = data.aircraft_overflights || [];
+    setAircraftUiVisible(data.aircraft?.show_ui !== false);
     if (
       state.aircraftPopupId != null &&
       !state.aircraftOverflights.some((a) => a.id === state.aircraftPopupId)

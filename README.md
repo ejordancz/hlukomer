@@ -61,9 +61,8 @@ Retence (wide storage):
 | `HOT_RETENTION_HOURS` | 48 | Plných 1 Hz (`samples_1s`); starší se sbalí na 5 s |
 | `ARCHIVE_INTERVAL_S` | 5 | Cold bucket (energy average) |
 | `RETENTION_DAYS` | 90 | Po N dnech se cold/minuty **smažou** |
-| `LIVE_RETENTION_DAYS` | 7 | Deprecated (jen při migraci ze starého EAV) |
 
-Migrace ze starého EAV schématu běží při startu na pozadí. Stav: `GET /api/admin/storage`. Po `verified` lze `POST /api/admin/storage/drop-eav` a off-peak `POST /api/admin/storage/vacuum`.
+Stav úložiště: `GET /api/admin/storage`. Off-peak zmenšení DB: `POST /api/admin/storage/vacuum`.
 
 ## 2. ESPHome
 
