@@ -596,7 +596,3 @@ def start_background_jobs(
         target=archive_loop, name="sample-archive", daemon=True
     )
     _archive_thread.start()
-
-
-def stop_background_jobs() -> None:
-    _stop.set()

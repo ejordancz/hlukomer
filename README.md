@@ -27,7 +27,7 @@ Z těchto dat dashboard počítá:
 
 > ESP posílá **IIR pásmové filtry**, ne true FFT. 1/3-oktáva v basu stačí k odlišení 50 Hz (síť) vs 63 Hz (ventilátor).
 
-Po změně spektra je potřeba **znovu flashnout** ESP (`esphome run esphome/hlukomer.yaml`). Backend přijímá i legacy 10 oktáv do přeflashování.
+Po změně spektra je potřeba **znovu flashnout** ESP (`esphome run esphome/hlukomer.yaml`).
 
 ## 1. Docker služba
 
@@ -90,11 +90,11 @@ Viz [CALIBRATION.md](./CALIBRATION.md). Po srovnání s referencí uprav `calibr
 curl -X POST http://localhost:8080/api/v1/ingest \
   -H "Content-Type: application/json" \
   -H "X-Api-Key: $(grep INGEST_API_KEY .env | cut -d= -f2)" \
-  -d '{"device_id":"hlukomer","kind":"live","laeq_1s":48.2,"spectrum":[35,42,40,33,30,28,25,22,20,18]}'
+  -d '{"device_id":"hlukomer","kind":"live","laeq_1s":48.2,"spectrum":[35,42,40,38,33,32,30,28,27,26,25,30,28,25,22,20,18]}'
 ```
 
 `spectrum` = 17 hodnot dB: 1/3-oktáva 25/31.5/40/50/63/80/100/125/160/200/250 + oktávy 500/1k/2k/4k/8k/16k Hz.  
-Volitelně `lez_1s` (LZeq) a `lfi_db` (20–200 Hz). Legacy firmware může poslat 10 oktáv.
+Volitelně `lez_1s` (LZeq) a `lfi_db` (20–200 Hz).
 
 ## Poznámky k umístění
 

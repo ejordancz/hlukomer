@@ -130,21 +130,6 @@ HVAC_BAND_INDEXES: tuple[int, ...] = tuple(
 )
 HVAC_MAX_INDEX = max(HVAC_BAND_INDEXES) if HVAC_BAND_INDEXES else 0
 
-# Legacy 10 oktáv (starší ESP firmware) — stále přijímáme při ingestu
-LEGACY_SPECTRUM_BANDS: tuple[str, ...] = (
-    "31",
-    "63",
-    "125",
-    "250",
-    "500",
-    "1k",
-    "2k",
-    "4k",
-    "8k",
-    "16k",
-)
-LEGACY_SPECTRUM_METRICS: tuple[str, ...] = tuple(f"oct_{b}" for b in LEGACY_SPECTRUM_BANDS)
-
 app = FastAPI(title="Hlukoměr", version="1.2.0")
 
 
@@ -442,7 +427,7 @@ class IngestPayload(BaseModel):
     laeq_1min: Optional[float] = None
     lamax_1min: Optional[float] = None
     lamin_1min: Optional[float] = None
-    # 17 pásem (nové) nebo 10 oktáv (legacy ESP)
+    # 17 pásem: 1/3-oktáva 25–250 Hz + oktávy výš
     spectrum: Optional[list[float]] = Field(default=None, max_length=17)
     ts: Optional[float] = None  # unix seconds; default = server time
 
@@ -608,24 +593,6 @@ def require_admin_session(
 
 class AdminLogin(BaseModel):
     password: str = Field(min_length=1, max_length=256)
-
-
-def insert_metric(
-    conn: sqlite3.Connection,
-    ts: float,
-    device_id: str,
-    kind: str,
-    metric: str,
-    value: float,
-) -> None:
-    """Legacy helper — preferovat storage.upsert_*; ponecháno pro kompatibilitu testů."""
-    v = storage.sanitize_value(value)
-    if v is None:
-        return
-    if metric in storage.MINUTE_COLS or kind == "minute":
-        storage.upsert_minute(conn, ts, device_id, {metric: v})
-    elif metric in storage.LIVE_VALUE_COLS:
-        storage.upsert_sample_1s(conn, ts, device_id, {metric: v})
 
 
 @app.on_event("startup")
@@ -1027,19 +994,12 @@ def latest_metric_value(
 def ingest(payload: IngestPayload, _: None = Depends(require_api_key)) -> dict[str, Any]:
     spectrum_cols: Optional[tuple[str, ...]] = None
     if payload.spectrum is not None:
-        n = len(payload.spectrum)
-        if n == len(SPECTRUM_BANDS):
-            spectrum_cols = SPECTRUM_METRICS
-        elif n == len(LEGACY_SPECTRUM_BANDS):
-            spectrum_cols = LEGACY_SPECTRUM_METRICS
-        else:
+        if len(payload.spectrum) != len(SPECTRUM_BANDS):
             raise HTTPException(
                 status_code=400,
-                detail=(
-                    f"spectrum must have {len(SPECTRUM_BANDS)} values "
-                    f"(or legacy {len(LEGACY_SPECTRUM_BANDS)})"
-                ),
+                detail=f"spectrum must have {len(SPECTRUM_BANDS)} values",
             )
+        spectrum_cols = SPECTRUM_METRICS
     ts = payload.ts if payload.ts is not None else utc_now()
     written = 0
     with db() as conn:
@@ -1239,28 +1199,6 @@ def spectrum_history(
     labels = list(SPECTRUM_LABELS)
     hz = list(SPECTRUM_HZ)
     note = "1/3-oktáva 25–250 Hz + oktávy výš (IIR). Trvalá čára = tón (např. 250 Hz nebo 50/63 Hz)."
-    if not columns:
-        with db() as conn:
-            complete = storage.fetch_spectrum_columns_raw(
-                conn, device_id, t_start, t_end, LEGACY_SPECTRUM_METRICS
-            )
-        columns, vmin, vmax = downsample_spectrum_columns(complete, max_columns)
-        if columns:
-            bands = list(LEGACY_SPECTRUM_BANDS)
-            labels = [
-                "31 Hz",
-                "63 Hz",
-                "125 Hz",
-                "250 Hz",
-                "500 Hz",
-                "1 kHz",
-                "2 kHz",
-                "4 kHz",
-                "8 kHz",
-                "16 kHz",
-            ]
-            hz = [31.5, 63.0, 125.0, 250.0, 500.0, 1000.0, 2000.0, 4000.0, 8000.0, 16000.0]
-            note = "Legacy 10 oktáv (starý firmware). Po flashi ESP uvidíš 1/3-oktávu v basu."
     with db() as conn:
         offline = fetch_offline_stats(conn, device_id, t_start, t_end)
         storage_info = {
