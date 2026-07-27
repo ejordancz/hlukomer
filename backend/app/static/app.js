@@ -266,6 +266,25 @@ function thresholdAtTime(limitPts, tSec) {
   return v;
 }
 
+/** Index bodu schodové řady platný v čase (poslední s x ≤ tMs). */
+function steppedIndexAt(ds, tMs) {
+  if (!ds?.length) return -1;
+  let best = 0;
+  for (let i = 0; i < ds.length; i++) {
+    if (ds[i].x <= tMs) best = i;
+    else break;
+  }
+  return best;
+}
+
+/** Y limitu z grafu v čase tMs (už po tonální korekci). */
+function chartLimitYAt(tMs) {
+  const ds = state.chart?.data?.datasets?.[1]?.data;
+  if (!ds?.length) return effectiveLimit(state.threshold);
+  const idx = steppedIndexAt(ds, tMs);
+  return idx >= 0 ? ds[idx].y : effectiveLimit(state.threshold);
+}
+
 function syncDisplayToggleUi() {
   const sw = $("switchWindow");
   const st = $("switchTonal");
@@ -804,10 +823,26 @@ function initChart() {
             },
             label: (ctx) => {
               if (ctx.dataset.label === "limit") {
+                // Čas bereme z naměřeného bodu — sparse limit + index-mode jinak lže.
+                const pts = ctx.chart.tooltip?.dataPoints || [];
+                const measured = pts.find((i) => i.dataset.label !== "limit");
+                const tMs = measured?.parsed?.x ?? ctx.parsed.x;
+                const lim = chartLimitYAt(tMs);
+                if (lim == null || Number.isNaN(Number(lim))) return null;
                 const tonal = state.display.tonalPenalty ? " (tón)" : "";
-                return `limit ${ctx.parsed.y.toFixed(1)} dBA${tonal}`;
+                return `limit ${Number(lim).toFixed(1)} dBA${tonal}`;
               }
+              if (ctx.parsed.y == null || Number.isNaN(ctx.parsed.y)) return null;
               return `${ctx.parsed.y.toFixed(1)} dBA`;
+            },
+            afterBody: (items) => {
+              const measured = items.find((i) => i.dataset.label !== "limit");
+              if (!measured || measured.parsed.y == null) return [];
+              const lim = chartLimitYAt(measured.parsed.x);
+              if (lim == null || Number.isNaN(Number(lim))) return [];
+              const delta = measured.parsed.y - Number(lim);
+              const sign = delta >= 0 ? "+" : "−";
+              return [`${sign}${Math.abs(delta).toFixed(1)} dBA od limitu`];
             },
           },
         },
@@ -1043,15 +1078,22 @@ function showChartTooltipAt(tsSec) {
   for (let di = 0; di < chart.data.datasets.length; di++) {
     const ds = chart.data.datasets[di].data;
     if (!ds?.length) continue;
-    let best = 0;
-    let bestDist = Infinity;
-    for (let i = 0; i < ds.length; i++) {
-      const d = Math.abs(ds[i].x - targetMs);
-      if (d < bestDist) {
-        bestDist = d;
-        best = i;
+    let best;
+    // Limit je schodová řada: platí poslední bod s časem ≤ kurzoru (ne nejbližší).
+    if (chart.data.datasets[di].label === "limit") {
+      best = steppedIndexAt(ds, targetMs);
+    } else {
+      best = 0;
+      let bestDist = Infinity;
+      for (let i = 0; i < ds.length; i++) {
+        const d = Math.abs(ds[i].x - targetMs);
+        if (d < bestDist) {
+          bestDist = d;
+          best = i;
+        }
       }
     }
+    if (best < 0) continue;
     const meta = chart.getDatasetMeta(di);
     if (meta.hidden || !meta.data[best]) continue;
     active.push({ datasetIndex: di, index: best });
