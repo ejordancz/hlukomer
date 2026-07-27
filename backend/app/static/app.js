@@ -58,11 +58,17 @@ const CHART_SPEC_HEIGHT = 288;
 const CHART_EXCESS_HEIGHT = Math.round(CHART_SPEC_HEIGHT / 4);
 /** Barva sloupců překročení + čtvereček v tooltipu. */
 const CHART_EXCESS_COLOR = "#e85d4c";
+/** Sloupce překročení mimo sledované frekvence (filtr zapnutý). */
+const CHART_EXCESS_SKIPPED_COLOR = "rgba(150, 162, 158, 0.42)";
 /** Spektrogram pod hlavním grafem jen pro rozsah ≤ 48 h. */
 const CHART_SPEC_MAX_HOURS = 48;
 
+/** Dominantní pásma, pro která se při filtru vyhodnocuje limit (Hz). */
+const LIMIT_EVAL_HZ = new Set([25, 200, 250]);
+
 const LS_WINDOW_CORR = "hlk.corr.window";
 const LS_TONAL_CORR = "hlk.corr.tonal";
+const LS_LIMIT_FREQ = "hlk.corr.limitFreq";
 
 function readLsBool(key, defaultOn = true) {
   try {
@@ -122,6 +128,8 @@ const state = {
   display: {
     windowCorr: readLsBool(LS_WINDOW_CORR, true),
     tonalPenalty: readLsBool(LS_TONAL_CORR, false),
+    /** Limit jen při dominantě 25 / 200 / 250 Hz. */
+    limitFreqFilter: readLsBool(LS_LIMIT_FREQ, false),
     windowDb: _displayCfg.windowDb,
     tonalDb: _displayCfg.tonalDb,
   },
@@ -353,6 +361,74 @@ function effectiveLimit(rawLimit) {
   return Number(rawLimit);
 }
 
+function isLimitEvalHz(hz) {
+  if (hz == null || Number.isNaN(Number(hz))) return false;
+  const n = Number(hz);
+  return LIMIT_EVAL_HZ.has(n) || LIMIT_EVAL_HZ.has(Math.round(n));
+}
+
+/** Dominantní Hz ze sloupce spektrogramu (max pásmo). */
+function dominantHzFromSpecValues(values) {
+  if (!values?.length) return null;
+  const hzList = state.chartSpectrogram?.hz;
+  let bestI = -1;
+  let bestV = -Infinity;
+  for (let i = 0; i < values.length; i++) {
+    const v = Number(values[i]);
+    if (Number.isNaN(v)) continue;
+    if (v > bestV) {
+      bestV = v;
+      bestI = i;
+    }
+  }
+  if (bestI < 0) return null;
+  if (hzList?.[bestI] != null) return Number(hzList[bestI]);
+  // Fallback podle pořadí pásem (25, 31.5, …).
+  const fallback = [25, 31.5, 40, 50, 63, 80, 100, 125, 160, 200, 250, 500, 1000, 2000, 4000, 8000, 16000];
+  return fallback[bestI] ?? null;
+}
+
+function dominantHzAtTime(tSec) {
+  const col = nearestSpecColumn(tSec);
+  if (!col?.v?.length) return null;
+  return dominantHzFromSpecValues(col.v);
+}
+
+/**
+ * Má se v daném okamžiku vyhodnocovat překročení limitu?
+ * Filtr vypnutý → vždy ano. Zapnutý → jen dominantní 25/200/250 Hz.
+ * Bez spektrogramu (např. rozsah > 48 h) → filtr se neaplikuje.
+ * Bod bez blízkého spektra → nehodnotit.
+ */
+function shouldEvaluateLimitAt(tSec) {
+  if (!state.display.limitFreqFilter) return true;
+  const cols = state.chartSpectrogram?.columns;
+  if (!cols?.length) return true;
+  const hz = dominantHzAtTime(tSec);
+  if (hz == null) return false;
+  return isLimitEvalHz(hz);
+}
+
+function liveShouldEvaluateLimit() {
+  if (!state.display.limitFreqFilter) return true;
+  const analysis = state.lastLatest?.analysis || state.lastLatest?.spectrum;
+  if (analysis?.dominant_hz != null) return isLimitEvalHz(analysis.dominant_hz);
+  const bands = analysis?.bands || state.lastLatest?.spectrum?.bands;
+  if (!bands?.length) return true;
+  let bestHz = null;
+  let bestV = -Infinity;
+  for (const b of bands) {
+    const v = Number(b.value);
+    if (Number.isNaN(v)) continue;
+    if (v > bestV) {
+      bestV = v;
+      bestHz = b.hz;
+    }
+  }
+  if (bestHz == null) return true;
+  return isLimitEvalHz(bestHz);
+}
+
 function thresholdAtTime(limitPts, tSec) {
   if (!limitPts?.length) return state.threshold;
   let v = limitPts[0].v;
@@ -385,8 +461,10 @@ function chartLimitYAt(tMs) {
 function syncDisplayToggleUi() {
   const sw = $("switchWindow");
   const st = $("switchTonal");
+  const sf = $("switchLimitFreq");
   if (sw) sw.setAttribute("aria-checked", state.display.windowCorr ? "true" : "false");
   if (st) st.setAttribute("aria-checked", state.display.tonalPenalty ? "true" : "false");
+  if (sf) sf.setAttribute("aria-checked", state.display.limitFreqFilter ? "true" : "false");
 
   const wDb = state.display.windowDb;
   const tDb = state.display.tonalDb;
@@ -396,14 +474,21 @@ function syncDisplayToggleUi() {
   const tonalTip =
     `Sníží hygienické limity o ${tDb} dB. Zapněte, pokud hluk obsahuje výrazný otravný tón ` +
     `(např. hučení na jedné frekvenci z větrání či čerpadla).`;
+  const limitFreqTip =
+    "Překročení limitu se počítá jen když je dominantní pásmo 25, 200 nebo 250 Hz (typicky vzduchotechnika). " +
+    "Jinak se LAeq zobrazí šedě a do statistiky nad limitem se nezapočítá.";
   const tipW = $("tipWindowCorr");
   const tipT = $("tipTonalCorr");
+  const tipF = $("tipLimitFreq");
   const descW = $("descWindowCorr");
   const descT = $("descTonalCorr");
+  const descF = $("descLimitFreq");
   if (tipW) tipW.textContent = windowTip;
   if (descW) descW.textContent = windowTip;
   if (tipT) tipT.textContent = tonalTip;
   if (descT) descT.textContent = tonalTip;
+  if (tipF) tipF.textContent = limitFreqTip;
+  if (descF) descF.textContent = limitFreqTip;
 }
 
 function setDisplayToggle(kind, on) {
@@ -413,10 +498,15 @@ function setDisplayToggle(kind, on) {
   } else if (kind === "tonal") {
     state.display.tonalPenalty = !!on;
     writeLsBool(LS_TONAL_CORR, state.display.tonalPenalty);
+  } else if (kind === "limitFreq") {
+    state.display.limitFreqFilter = !!on;
+    writeLsBool(LS_LIMIT_FREQ, state.display.limitFreqFilter);
   }
   syncDisplayToggleUi();
   applyLatestDisplay();
-  applyHistoryDisplay({ refetchSpec: false });
+  // Filtr frekvencí potřebuje spektrogram pro dominantu v historii.
+  const needSpec = kind === "limitFreq" && state.display.limitFreqFilter;
+  applyHistoryDisplay({ refetchSpec: needSpec });
 }
 
 function applyLatestDisplay() {
@@ -436,13 +526,14 @@ function applyLatestDisplay() {
   if (live) {
     const shown = applyWindow(live.value);
     const txt = fmtDb(shown);
+    const evalOk = liveShouldEvaluateLimit();
     document.querySelectorAll(".js-live-level").forEach((el) => {
       el.textContent = txt;
-      setLevelClass(el, shown, lim);
+      setLevelClass(el, shown, lim, { evaluate: evalOk });
     });
     const age = Math.max(0, Math.round(Date.now() / 1000 - live.ts));
     setAllText(".js-live-meta", fmtAge(age));
-    updateOverLimit(shown, lim);
+    updateOverLimit(shown, lim, { evaluate: evalOk });
   } else {
     updateOverLimit(null, lim);
   }
@@ -475,10 +566,13 @@ function computeDisplayStats(points, limitPts) {
     if (p.v == null || Number.isNaN(Number(p.v))) continue;
     const level = applyWindow(p.v);
     const lim = effectiveLimit(thresholdAtTime(limitPts, p.t));
+    const over = level > lim;
+    // Stejný vzorek jako u % nad limitem: pod limitem, nebo dominanta 25/200/250 Hz.
+    if (over && !shouldEvaluateLimitAt(p.t)) continue;
     sum += level;
     if (level < min) min = level;
     if (level > max) max = level;
-    if (level > lim) above += 1;
+    if (over) above += 1;
     n += 1;
   }
   if (!n) return { avg: null, min: null, max: null, above_threshold_pct: null };
@@ -537,7 +631,10 @@ function applyHistoryDisplay({ refetchSpec = true } = {}) {
     syncCustomRangeInputs(range.t0, range.t1);
   }
 
-  const needRecompute = state.display.windowCorr || state.display.tonalPenalty;
+  const needRecompute =
+    state.display.windowCorr ||
+    state.display.tonalPenalty ||
+    state.display.limitFreqFilter;
   const s = needRecompute
     ? computeDisplayStats(rawPoints, limitPts)
     : data.stats || {};
@@ -600,9 +697,13 @@ function chartTimeFormats(hours) {
   };
 }
 
-function setLevelClass(el, value, limit = null) {
-  el.classList.remove("hot", "over");
+function setLevelClass(el, value, limit = null, { evaluate = true } = {}) {
+  el.classList.remove("hot", "over", "is-uneval");
   if (value == null) return;
+  if (!evaluate) {
+    el.classList.add("is-uneval");
+    return;
+  }
   const lim = limit != null ? limit : state.threshold;
   if (value >= lim + 5) el.classList.add("over");
   else if (value >= lim) el.classList.add("hot");
@@ -621,7 +722,7 @@ function fmtAge(ageSec) {
   return `naposledy před ${Math.round(ageSec / 3600)} h`;
 }
 
-function updateOverLimit(laeq, limit = null) {
+function updateOverLimit(laeq, limit = null, { evaluate = true } = {}) {
   const periodLabel = state.period === "night" ? "noc" : "den";
   const labels = document.querySelectorAll(".js-over-label");
   const values = document.querySelectorAll(".js-over-value");
@@ -634,13 +735,29 @@ function updateOverLimit(laeq, limit = null) {
     });
     values.forEach((el) => {
       el.textContent = "—.—";
-      el.classList.remove("over-limit", "under-limit");
+      el.classList.remove("over-limit", "under-limit", "is-uneval");
     });
     subs.forEach((el) => {
       el.textContent = "dB vs limit";
     });
     return;
   }
+
+  if (!evaluate) {
+    labels.forEach((el) => {
+      el.textContent = "Od limitu";
+    });
+    values.forEach((el) => {
+      el.textContent = "—.—";
+      el.classList.remove("over-limit", "under-limit");
+      el.classList.add("is-uneval");
+    });
+    subs.forEach((el) => {
+      el.textContent = "mimo sledované frekvence";
+    });
+    return;
+  }
+
   const delta = laeq - lim;
   const over = delta >= 0;
   const sign = over ? "+" : "−";
@@ -655,6 +772,7 @@ function updateOverLimit(laeq, limit = null) {
   });
   values.forEach((el) => {
     el.textContent = value;
+    el.classList.remove("is-uneval");
     el.classList.toggle("over-limit", over);
     el.classList.toggle("under-limit", !over);
   });
@@ -1530,7 +1648,8 @@ function drawChartExcess() {
     if (lim == null || Number.isNaN(Number(lim))) continue;
     const excess = Number(p.y) - Number(lim);
     if (excess <= 0) continue;
-    inView.push({ t: tSec, excess });
+    const evaluate = shouldEvaluateLimitAt(tSec);
+    inView.push({ t: tSec, excess, evaluate });
     if (excess > maxEx) maxEx = excess;
   }
 
@@ -1556,7 +1675,7 @@ function drawChartExcess() {
     if (x < -barW || x > w + barW) continue;
     const bh = Math.max(1, (item.excess / yMax) * (h - 1));
     const top = h - bh;
-    ctx.fillStyle = CHART_EXCESS_COLOR;
+    ctx.fillStyle = item.evaluate ? CHART_EXCESS_COLOR : CHART_EXCESS_SKIPPED_COLOR;
     ctx.fillRect(Math.floor(x - barW / 2), Math.floor(top), Math.ceil(barW), Math.ceil(bh));
   }
 }
@@ -1580,12 +1699,16 @@ async function refreshChartSpectrogram() {
     if (reqId !== state.chartSpecReqId) return;
     state.chartSpectrogram = data;
     state.specTooltipColTs = null;
-    drawChartSpectrogram();
-    drawChartExcess();
-    renderChartAxisLabels();
-    syncDisplayToggleUi();
-    if (state.hoverTs != null) {
-      showChartCrosshair(state.hoverTs);
+    if (state.display.limitFreqFilter) {
+      applyHistoryDisplay({ refetchSpec: false });
+    } else {
+      drawChartSpectrogram();
+      drawChartExcess();
+      renderChartAxisLabels();
+      syncDisplayToggleUi();
+      if (state.hoverTs != null) {
+        showChartCrosshair(state.hoverTs);
+      }
     }
   } catch (err) {
     if (reqId === state.chartSpecReqId) console.error(err);

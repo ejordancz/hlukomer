@@ -93,7 +93,7 @@ body {
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  max-width: 13.5rem;
+  max-width: 15.5rem;
 }
 
 .display-toggle-label {
@@ -321,6 +321,11 @@ main {
   animation: throb 1.2s ease-in-out infinite;
 }
 
+.level.is-uneval {
+  color: var(--muted-dim);
+  animation: none;
+}
+
 @keyframes throb {
   0%,
   100% {
@@ -371,6 +376,10 @@ main {
 
 .derived-value.under-limit {
   color: var(--chart);
+}
+
+.derived-value.is-uneval {
+  color: var(--muted-dim);
 }
 
 .derived-unit {

@@ -9,7 +9,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,700&family=IBM+Plex+Mono:wght@400;500&family=Sora:wght@400;500;600&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/static/style.css?v=56" />
+  <link rel="stylesheet" href="/static/style.css?v=57" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@mdi/font@7.4.47/css/materialdesignicons.min.css" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.9/dist/chart.umd.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
@@ -76,6 +76,28 @@
           </div>
           <span class="visually-hidden" id="descTonalCorr">
             Sníží hygienické limity o 5 dB. Zapněte, pokud hluk obsahuje výrazný otravný tón (např. hučení na jedné frekvenci z větrání či čerpadla).
+          </span>
+        </div>
+        <div class="display-toggle" data-switch="limitFreq">
+          <div class="pill-switch-wrap">
+            <button
+              type="button"
+              class="pill-switch"
+              id="switchLimitFreq"
+              role="switch"
+              aria-checked="false"
+              aria-labelledby="labelLimitFreq"
+              aria-describedby="descLimitFreq"
+            >
+              <span class="pill-switch-thumb" aria-hidden="true"></span>
+            </button>
+          </div>
+          <span class="display-toggle-label" id="labelLimitFreq">Limit vyhodnocovat pouze pro frekvence 25Hz, 200Hz, 250Hz</span>
+          <div class="display-toggle-tip" id="tipLimitFreq" role="tooltip">
+            Překročení limitu se počítá jen když je dominantní pásmo 25, 200 nebo 250 Hz (typicky vzduchotechnika). Jinak se LAeq zobrazí šedě a do statistiky nad limitem se nezapočítá.
+          </div>
+          <span class="visually-hidden" id="descLimitFreq">
+            Překročení limitu se počítá jen když je dominantní pásmo 25, 200 nebo 250 Hz (typicky vzduchotechnika). Jinak se LAeq zobrazí šedě a do statistiky nad limitem se nezapočítá.
           </span>
         </div>
       </div>
@@ -261,6 +283,6 @@
     </div>
   </footer>
 
-  <script src="/static/app.js?v=49"></script>
+  <script src="/static/app.js?v=52"></script>
 </body>
 </html>
