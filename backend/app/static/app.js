@@ -54,8 +54,8 @@ const LF_BANDS = new Set([
 ]);
 
 const CHART_SPEC_HEIGHT = 288;
-/** Spektrogram pod hlavním grafem jen pro rozsah ≤ 24 h. */
-const CHART_SPEC_MAX_HOURS = 24;
+/** Spektrogram pod hlavním grafem jen pro rozsah ≤ 48 h. */
+const CHART_SPEC_MAX_HOURS = 48;
 
 const LS_WINDOW_CORR = "hlk.corr.window";
 const LS_TONAL_CORR = "hlk.corr.tonal";
@@ -277,9 +277,15 @@ function syncChartSpecVisibility(hours) {
   const on = chartSpecEnabled(hours);
   const strip = $("chartSpecStrip");
   const labels = $("chartAxisLabels");
+  const unavailable = $("chartSpecUnavailable");
   const stack = $("chartStack");
   if (strip) strip.hidden = !on;
   if (labels) labels.hidden = !on;
+  if (unavailable) {
+    unavailable.hidden = on;
+    unavailable.textContent =
+      `Spektrogram se zobrazuje pouze pro rozsah do ${CHART_SPEC_MAX_HOURS} hodin.`;
+  }
   stack?.classList.toggle("has-spec", on);
   const chart = state.chart;
   if (chart?.options?.scales?.x?.ticks) {

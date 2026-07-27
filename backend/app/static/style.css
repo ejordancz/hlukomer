@@ -750,6 +750,27 @@ main {
   display: none;
 }
 
+.chart-spec-unavailable {
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0.35rem 0 0;
+  padding: 0.85rem 1rem;
+  min-height: 3.25rem;
+  border: 1px dashed var(--line);
+  border-radius: 0.25rem;
+  color: var(--muted-dim);
+  font-size: 0.78rem;
+  line-height: 1.35;
+  text-align: center;
+  background: rgba(10, 16, 16, 0.35);
+}
+
+.chart-spec-unavailable[hidden] {
+  display: none;
+}
+
 .chart-spec-y {
   position: relative;
   z-index: 3;
