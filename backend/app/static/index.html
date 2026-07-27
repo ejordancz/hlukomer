@@ -199,10 +199,20 @@
           <span class="chart-legend-item"><span class="swatch day"></span>den</span>
           <span class="chart-legend-item"><span class="swatch night"></span>noc</span>
           <span class="chart-legend-item"><span class="swatch limit"></span>limit</span>
+          <span class="chart-legend-item"><span class="swatch excess"></span>překročení</span>
           <span class="chart-legend-item" id="legendAircraft"><span class="swatch aircraft" aria-hidden="true"><span class="mdi mdi-airplane"></span></span>přelet</span>
         </div>
         <div class="chart-stack" id="chartStack">
           <canvas id="chart" height="120"></canvas>
+          <div class="chart-excess-strip" id="chartExcessStrip">
+            <div class="chart-excess-y" id="chartExcessYLabels" aria-hidden="true"></div>
+            <div class="chart-excess-plot">
+              <div class="chart-excess-unit" aria-hidden="true">ΔdB</div>
+              <div class="chart-excess-canvas-wrap" id="chartExcessCanvasWrap">
+                <canvas id="chartExcess" height="72" role="img" aria-label="Překročení limitu"></canvas>
+              </div>
+            </div>
+          </div>
           <div class="chart-spec-strip" id="chartSpecStrip" hidden>
             <div class="chart-spec-y" id="chartSpecYLabels" aria-hidden="true"></div>
             <div class="chart-spec-plot">

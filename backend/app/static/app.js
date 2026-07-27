@@ -54,6 +54,10 @@ const LF_BANDS = new Set([
 ]);
 
 const CHART_SPEC_HEIGHT = 288;
+/** Výška grafu překročení limitu (~1/4 spektrogramu). */
+const CHART_EXCESS_HEIGHT = Math.round(CHART_SPEC_HEIGHT / 4);
+/** Barva sloupců překročení + čtvereček v tooltipu. */
+const CHART_EXCESS_COLOR = "#e85d4c";
 /** Spektrogram pod hlavním grafem jen pro rozsah ≤ 48 h. */
 const CHART_SPEC_MAX_HOURS = 48;
 
@@ -259,6 +263,7 @@ function applyHistoryTimeRange(t0, t1, hours) {
     syncChartSpecVisibility(hours);
   }
   drawChartSpectrogram();
+  drawChartExcess();
   renderChartAxisLabels();
   renderAircraftTimeline();
   renderWeatherTimeline();
@@ -505,10 +510,15 @@ function applyHistoryDisplay({ refetchSpec = true } = {}) {
   const rawPoints = data.points || [];
   const limitPts = data.threshold_points || [];
 
-  state.chart.data.datasets[0].data = rawPoints.map((p) => ({
+  const measuredData = rawPoints.map((p) => ({
     x: p.t * 1000,
     y: applyWindow(p.v),
   }));
+  state.chart.data.datasets[0].data = measuredData;
+  // Neviditelná řada jen pro čtvereček v tooltipu (stejná barva jako mezigraf).
+  if (state.chart.data.datasets[2]) {
+    state.chart.data.datasets[2].data = measuredData;
+  }
 
   state.chart.data.datasets[1].data = limitPts.map((p) => ({
     x: p.t * 1000,
@@ -541,6 +551,7 @@ function applyHistoryDisplay({ refetchSpec = true } = {}) {
     refreshChartSpectrogram();
   } else {
     drawChartSpectrogram();
+    drawChartExcess();
     renderChartAxisLabels();
     if (state.hoverTs != null) showChartCrosshair(state.hoverTs);
     state.chart.update("none");
@@ -866,6 +877,17 @@ function initChart() {
           // Společně s dvojicí bodů na hranici den/noc z API vznikne správný schod.
           stepped: "before",
         },
+        {
+          // Jen pro tooltip — čtvereček ve barvě mezigrafu u „od limitu“.
+          label: "excess",
+          data: [],
+          borderColor: CHART_EXCESS_COLOR,
+          backgroundColor: CHART_EXCESS_COLOR,
+          pointRadius: 0,
+          borderWidth: 0,
+          showLine: false,
+          fill: false,
+        },
       ],
     },
     options: {
@@ -920,24 +942,23 @@ function initChart() {
               if (ctx.dataset.label === "limit") {
                 // Čas bereme z naměřeného bodu — sparse limit + index-mode jinak lže.
                 const pts = ctx.chart.tooltip?.dataPoints || [];
-                const measured = pts.find((i) => i.dataset.label !== "limit");
+                const measured = pts.find((i) => i.dataset.label === "dBA");
                 const tMs = measured?.parsed?.x ?? ctx.parsed.x;
                 const lim = chartLimitYAt(tMs);
                 if (lim == null || Number.isNaN(Number(lim))) return null;
                 const tonal = state.display.tonalPenalty ? " (tón)" : "";
                 return `limit ${Number(lim).toFixed(1)} dBA${tonal}`;
               }
+              if (ctx.dataset.label === "excess") {
+                if (ctx.parsed.y == null || Number.isNaN(ctx.parsed.y)) return null;
+                const lim = chartLimitYAt(ctx.parsed.x);
+                if (lim == null || Number.isNaN(Number(lim))) return null;
+                const delta = ctx.parsed.y - Number(lim);
+                const sign = delta >= 0 ? "+" : "−";
+                return `${sign}${Math.abs(delta).toFixed(1)} dBA od limitu`;
+              }
               if (ctx.parsed.y == null || Number.isNaN(ctx.parsed.y)) return null;
               return `${ctx.parsed.y.toFixed(1)} dBA`;
-            },
-            afterBody: (items) => {
-              const measured = items.find((i) => i.dataset.label !== "limit");
-              if (!measured || measured.parsed.y == null) return [];
-              const lim = chartLimitYAt(measured.parsed.x);
-              if (lim == null || Number.isNaN(Number(lim))) return [];
-              const delta = measured.parsed.y - Number(lim);
-              const sign = delta >= 0 ? "+" : "−";
-              return [`${sign}${Math.abs(delta).toFixed(1)} dBA od limitu`];
             },
           },
         },
@@ -1147,6 +1168,14 @@ function layoutChartSpecStrip() {
   const yEl = $("chartSpecYLabels");
   if (yEl) yEl.style.width = padL;
 
+  const excess = $("chartExcessStrip");
+  if (excess) {
+    excess.style.marginLeft = "0";
+    excess.style.width = "100%";
+  }
+  const excessY = $("chartExcessYLabels");
+  if (excessY) excessY.style.width = padL;
+
   const labels = $("chartAxisLabels");
   if (labels) {
     labels.style.marginLeft = padL;
@@ -1313,6 +1342,10 @@ function showChartCrosshair(tsSec) {
   const left = canvasRect.left - wrapRect.left + xPix;
   const top = canvasRect.top - wrapRect.top + chart.chartArea.top;
   let bottom = canvasRect.top - wrapRect.top + chart.chartArea.bottom;
+  const excessStrip = $("chartExcessStrip");
+  if (excessStrip && !excessStrip.hidden) {
+    bottom = Math.max(bottom, excessStrip.getBoundingClientRect().bottom - wrapRect.top);
+  }
   if (chartSpecEnabled() && !$("chartSpecStrip")?.hidden) {
     const labels = $("chartAxisLabels");
     const endEl = labels && !labels.hidden ? labels : $("chartSpecStrip");
@@ -1446,10 +1479,93 @@ function drawChartSpectrogram() {
   }
 }
 
+/** Nice upper bound for excess Y scale (dB above limit). */
+function niceExcessMax(rawMax) {
+  const m = Math.max(1, Number(rawMax) || 0);
+  if (m <= 2) return 2;
+  if (m <= 5) return 5;
+  if (m <= 10) return 10;
+  return Math.ceil(m / 5) * 5;
+}
+
+/** Sloupcový graf překročení limitu (jen kladné Δ = naměřené − limit). */
+function drawChartExcess() {
+  const canvas = $("chartExcess");
+  const strip = $("chartExcessStrip");
+  const wrap = $("chartExcessCanvasWrap");
+  const yEl = $("chartExcessYLabels");
+  if (!canvas || !strip) return;
+
+  layoutChartSpecStrip();
+  const host = wrap || strip;
+  const w = Math.max(40, Math.floor(host.clientWidth || 0));
+  const h = CHART_EXCESS_HEIGHT;
+  canvas.width = w * devicePixelRatio;
+  canvas.height = h * devicePixelRatio;
+  canvas.style.width = `${w}px`;
+  canvas.style.height = `${h}px`;
+  const ctx = canvas.getContext("2d");
+  ctx.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0);
+
+  ctx.fillStyle = "#0a1010";
+  ctx.fillRect(0, 0, w, h);
+
+  const pts = state.chart?.data?.datasets?.[0]?.data;
+  const { t0, t1 } = state.chartRange;
+  const span = Math.max(1e-6, t1 - t0);
+  if (!pts?.length) {
+    if (yEl) yEl.innerHTML = "";
+    return;
+  }
+
+  const inView = [];
+  let maxEx = 0;
+  let nPts = 0;
+  for (const p of pts) {
+    const tSec = p.x / 1000;
+    if (tSec < t0 - span * 0.02 || tSec > t1 + span * 0.02) continue;
+    nPts += 1;
+    if (p.y == null || Number.isNaN(Number(p.y))) continue;
+    const lim = chartLimitYAt(p.x);
+    if (lim == null || Number.isNaN(Number(lim))) continue;
+    const excess = Number(p.y) - Number(lim);
+    if (excess <= 0) continue;
+    inView.push({ t: tSec, excess });
+    if (excess > maxEx) maxEx = excess;
+  }
+
+  const yMax = niceExcessMax(maxEx);
+  if (yEl) {
+    yEl.innerHTML = `<span>${yMax}</span><span>0</span>`;
+  }
+
+  // Baseline
+  ctx.strokeStyle = "rgba(232, 240, 236, 0.12)";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(0, h - 0.5);
+  ctx.lineTo(w, h - 0.5);
+  ctx.stroke();
+
+  if (!inView.length) return;
+
+  // Šířka podle hustoty všech bodů v okně (ne jen překročení).
+  const barW = Math.max(1, Math.min(6, w / Math.max(1, nPts)));
+  for (const item of inView) {
+    const x = ((item.t - t0) / span) * w;
+    if (x < -barW || x > w + barW) continue;
+    const bh = Math.max(1, (item.excess / yMax) * (h - 1));
+    const top = h - bh;
+    ctx.fillStyle = CHART_EXCESS_COLOR;
+    ctx.fillRect(Math.floor(x - barW / 2), Math.floor(top), Math.ceil(barW), Math.ceil(bh));
+  }
+}
+
 async function refreshChartSpectrogram() {
   if (!chartSpecEnabled()) {
     state.chartSpectrogram = null;
     drawChartSpectrogram();
+    drawChartExcess();
     syncDisplayToggleUi();
     if (state.hoverTs == null) hideSpecTooltip();
     return;
@@ -1465,6 +1581,7 @@ async function refreshChartSpectrogram() {
     state.chartSpectrogram = data;
     state.specTooltipColTs = null;
     drawChartSpectrogram();
+    drawChartExcess();
     renderChartAxisLabels();
     syncDisplayToggleUi();
     if (state.hoverTs != null) {
@@ -1615,9 +1732,10 @@ async function refreshHistory() {
   }
 }
 
-/** Drag-pan časové osy — graf i mini-spektrogram. */
+/** Drag-pan časové osy — graf, překročení i spektrogram. */
 function bindChartPan() {
   const chartCanvas = $("chart");
+  const excessCanvas = $("chartExcess");
   const specCanvas = $("chartSpectrogram");
   if (!chartCanvas) return;
 
@@ -1631,6 +1749,7 @@ function bindChartPan() {
 
   const setDraggingClass = (on) => {
     chartCanvas.classList.toggle("is-dragging", on);
+    excessCanvas?.classList.toggle("is-dragging", on);
     specCanvas?.classList.toggle("is-dragging", on);
   };
 
@@ -1674,8 +1793,8 @@ function bindChartPan() {
       const y = ev.clientY - rect.top;
       const { left, right, top, bottom } = chart.chartArea;
       if (x < left || x > right || y < top || y > bottom) return;
-    } else if (!chartSpecEnabled() || $("chartSpecStrip")?.hidden) {
-      return;
+    } else if (hitTest === "spec") {
+      if (!chartSpecEnabled() || $("chartSpecStrip")?.hidden) return;
     }
 
     pointerId = ev.pointerId;
@@ -1726,8 +1845,15 @@ function bindChartPan() {
   chartCanvas.addEventListener("pointerup", endPan);
   chartCanvas.addEventListener("pointercancel", endPan);
 
+  if (excessCanvas) {
+    excessCanvas.addEventListener("pointerdown", (ev) => onDown(ev, "full"));
+    excessCanvas.addEventListener("pointermove", onMove);
+    excessCanvas.addEventListener("pointerup", endPan);
+    excessCanvas.addEventListener("pointercancel", endPan);
+  }
+
   if (specCanvas) {
-    specCanvas.addEventListener("pointerdown", (ev) => onDown(ev, "full"));
+    specCanvas.addEventListener("pointerdown", (ev) => onDown(ev, "spec"));
     specCanvas.addEventListener("pointermove", onMove);
     specCanvas.addEventListener("pointerup", endPan);
     specCanvas.addEventListener("pointercancel", endPan);
@@ -1741,7 +1867,7 @@ function bindChartCrosshair() {
   stack.addEventListener("mousemove", (ev) => {
     if (state.chartPanning) return;
     const onSurface = ev.target.closest?.(
-      "#chart, #chartSpectrogram, .chart-spec-strip, .chart-spec-canvas-wrap, .chart-axis-labels"
+      "#chart, #chartExcess, #chartSpectrogram, .chart-excess-strip, .chart-spec-strip, .chart-spec-canvas-wrap, .chart-axis-labels"
     );
     if (!onSurface) {
       hideChartCrosshair();
@@ -1879,6 +2005,7 @@ function bind() {
 
   window.addEventListener("resize", () => {
     drawChartSpectrogram();
+    drawChartExcess();
     renderChartAxisLabels();
     layoutChartSpecStrip();
     renderAircraftTimeline();
