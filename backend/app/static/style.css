@@ -644,6 +644,50 @@ main {
   min-width: 10rem;
 }
 
+.controls input[type="date"],
+.controls input[type="time"] {
+  appearance: auto;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 0.45rem;
+  padding: 0.55rem 0.65rem;
+  font-family: var(--font-ui);
+  font-size: 0.95rem;
+  color-scheme: dark;
+  cursor: pointer;
+}
+
+.controls input[type="date"] {
+  min-width: 10.5rem;
+}
+
+.controls input[type="time"] {
+  min-width: 7.25rem;
+}
+
+.controls input[type="date"]::-webkit-calendar-picker-indicator,
+.controls input[type="time"]::-webkit-calendar-picker-indicator {
+  cursor: pointer;
+  opacity: 0.85;
+}
+
+.datetime-pair {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.custom-range {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1.15rem 1.35rem;
+}
+
+.custom-range[hidden] {
+  display: none;
+}
+
 .chart-controls .ghost-btn {
   align-self: flex-end;
   margin-bottom: 0.1rem;

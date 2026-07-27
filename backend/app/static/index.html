@@ -142,8 +142,25 @@
             <option value="24">24 hodin</option>
             <option value="168">7 dní</option>
             <option value="720">30 dní</option>
+            <option value="custom">Vlastní</option>
           </select>
         </label>
+        <div class="custom-range" id="customRange" hidden>
+          <label>
+            Od
+            <span class="datetime-pair">
+              <input type="date" id="rangeFromDate" />
+              <input type="time" id="rangeFromTime" step="60" />
+            </span>
+          </label>
+          <label>
+            Do
+            <span class="datetime-pair">
+              <input type="date" id="rangeToDate" />
+              <input type="time" id="rangeToTime" step="60" />
+            </span>
+          </label>
+        </div>
         <label>
           Metrika
           <select id="metricSelect">

@@ -126,12 +126,98 @@ const state = {
 };
 
 const CHART_MAX_LOOKBACK_S = 90 * 24 * 3600;
+const CUSTOM_RANGE_MIN_S = 0.1 * 3600;
+const CUSTOM_RANGE_MAX_S = CHART_MAX_LOOKBACK_S;
+
+function isCustomRange() {
+  return $("rangeSelect")?.value === "custom";
+}
+
+function pad2(n) {
+  return String(n).padStart(2, "0");
+}
+
+/** Části date/time inputů v lokálním čase. */
+function toDateParts(tsSec) {
+  const d = new Date(tsSec * 1000);
+  return {
+    date: `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`,
+    time: `${pad2(d.getHours())}:${pad2(d.getMinutes())}`,
+  };
+}
+
+function fromDateAndTime(dateVal, timeVal) {
+  if (!dateVal || !timeVal) return null;
+  const t = new Date(`${dateVal}T${timeVal}`).getTime() / 1000;
+  return Number.isFinite(t) ? t : null;
+}
+
+function readCustomRange() {
+  const t0 = fromDateAndTime($("rangeFromDate")?.value, $("rangeFromTime")?.value);
+  const t1 = fromDateAndTime($("rangeToDate")?.value, $("rangeToTime")?.value);
+  if (t0 == null || t1 == null || t1 <= t0) return null;
+  return { t0, t1 };
+}
+
+function syncCustomRangeInputs(t0, t1) {
+  const fromDate = $("rangeFromDate");
+  const fromTime = $("rangeFromTime");
+  const toDate = $("rangeToDate");
+  const toTime = $("rangeToTime");
+  if (!fromDate || !fromTime || !toDate || !toTime) return;
+  const a = toDateParts(t0);
+  const b = toDateParts(t1);
+  fromDate.value = a.date;
+  fromTime.value = a.time;
+  toDate.value = b.date;
+  toTime.value = b.time;
+}
+
+function seedCustomRangeDefaults() {
+  const now = Date.now() / 1000;
+  syncCustomRangeInputs(now - 12 * 3600, now);
+}
+
+function setCustomRangeVisible(on) {
+  const el = $("customRange");
+  if (el) el.hidden = !on;
+}
+
+/** Délka okna v hodinách — preset select nebo vlastní OD/DO. */
+function currentRangeHours() {
+  if (isCustomRange()) {
+    const custom = readCustomRange();
+    if (custom) {
+      return Math.min(
+        CUSTOM_RANGE_MAX_S / 3600,
+        Math.max(CUSTOM_RANGE_MIN_S / 3600, (custom.t1 - custom.t0) / 3600)
+      );
+    }
+    return 12;
+  }
+  return Number($("rangeSelect")?.value || 6);
+}
 
 /** Aktuální časový rozsah hlavního grafu podle selectu (+ live / pan). */
 function selectedHistoryRange() {
-  const hours = Number($("rangeSelect")?.value || 6);
+  const hours = currentRangeHours();
   const span = hours * 3600;
   const now = Date.now() / 1000;
+  if (isCustomRange() && !state.chartLive && state.chartStart == null) {
+    const custom = readCustomRange();
+    if (custom) {
+      let t0 = custom.t0;
+      let t1 = Math.min(custom.t1, now);
+      if (t1 - t0 < CUSTOM_RANGE_MIN_S) t0 = t1 - CUSTOM_RANGE_MIN_S;
+      const earliest = now - CHART_MAX_LOOKBACK_S;
+      if (t0 < earliest) {
+        t0 = earliest;
+        t1 = Math.min(Math.max(t1, t0 + CUSTOM_RANGE_MIN_S), now);
+      }
+      const h = Math.max(CUSTOM_RANGE_MIN_S / 3600, (t1 - t0) / 3600);
+      return { t0, t1, hours: h, start: t0 };
+    }
+  }
   if (state.chartLive || state.chartStart == null) {
     return { t0: now - span, t1: now, hours, start: null };
   }
@@ -183,7 +269,7 @@ function applyHistoryTimeRange(t0, t1, hours) {
   });
 }
 
-function chartSpecEnabled(hours = Number($("rangeSelect")?.value || 6)) {
+function chartSpecEnabled(hours = currentRangeHours()) {
   return Number(hours) <= CHART_SPEC_MAX_HOURS + 1e-9;
 }
 
@@ -431,6 +517,9 @@ function applyHistoryDisplay({ refetchSpec = true } = {}) {
     state.chartStart = data.start;
   }
   applyHistoryTimeRange(range.t0, range.t1, range.hours);
+  if (isCustomRange() && state.chartLive) {
+    syncCustomRangeInputs(range.t0, range.t1);
+  }
 
   const needRecompute = state.display.windowCorr || state.display.tonalPenalty;
   const s = needRecompute
@@ -794,7 +883,7 @@ function initChart() {
             autoSkipPadding: 16,
             callback(value) {
               if (typeof value !== "number") return "";
-              const hours = Number($("rangeSelect")?.value || 6);
+              const hours = currentRangeHours();
               return fmtAxisTime(value / 1000, { withDate: hours >= 48 });
             },
           },
@@ -1245,7 +1334,7 @@ function renderChartAxisLabels() {
   }
   layoutChartSpecStrip();
   const { t0, t1 } = state.chartRange;
-  const hours = Number($("rangeSelect")?.value || 6);
+  const hours = currentRangeHours();
   const span = Math.max(1e-6, t1 - t0);
   const n = 6;
   const parts = [];
@@ -1564,6 +1653,7 @@ function bindChartPan() {
       setChartLive(false);
       state.chartStart = t0;
     }
+    if (isCustomRange()) syncCustomRangeInputs(t0, t1);
     refreshHistory();
   };
 
@@ -1609,7 +1699,7 @@ function bindChartPan() {
     moved = true;
     const span = Math.max(1e-6, originT1 - originT0);
     const dt = -(dx / width) * span;
-    const hours = Number($("rangeSelect")?.value || 6);
+    const hours = currentRangeHours();
     const now = Date.now() / 1000;
     const earliest = now - CHART_MAX_LOOKBACK_S;
     let t0 = originT0 + dt;
@@ -1661,35 +1751,86 @@ function bindChartCrosshair() {
   stack.addEventListener("mouseleave", () => hideChartCrosshair());
 }
 
+function applyCustomRangeFromInputs() {
+  const custom = readCustomRange();
+  if (!custom) return;
+  const now = Date.now() / 1000;
+  let { t0, t1 } = custom;
+  if (t1 > now) t1 = now;
+  if (t1 - t0 < CUSTOM_RANGE_MIN_S) t0 = t1 - CUSTOM_RANGE_MIN_S;
+  if (t1 - t0 > CUSTOM_RANGE_MAX_S) t0 = t1 - CUSTOM_RANGE_MAX_S;
+  const earliest = now - CHART_MAX_LOOKBACK_S;
+  if (t0 < earliest) {
+    t0 = earliest;
+    t1 = Math.min(Math.max(t1, t0 + CUSTOM_RANGE_MIN_S), now);
+  }
+  syncCustomRangeInputs(t0, t1);
+  // date/time inputy mají minutovou přesnost — tolerance ~2 min od „teď“
+  if (t1 >= now - 120) {
+    setChartLive(true);
+  } else {
+    setChartLive(false);
+    state.chartStart = t0;
+  }
+  const hours = Math.max(CUSTOM_RANGE_MIN_S / 3600, (t1 - t0) / 3600);
+  applyHistoryTimeRange(t0, t1, hours);
+  syncDisplayToggleUi();
+  refreshHistory();
+}
+
 function bind() {
   $("rangeSelect").addEventListener("change", () => {
     closeAircraftPopup();
     state.aircraftOverflights = [];
     state.weatherTimeline = [];
-    // Při změně délky okna zachovat konec (živě / aktuální t1).
-    if (!state.chartLive && state.chartRange.t1 > 0) {
-      const hours = Number($("rangeSelect").value || 6);
-      const span = hours * 3600;
-      const now = Date.now() / 1000;
-      let t1 = Math.min(state.chartRange.t1, now);
-      let t0 = t1 - span;
-      const earliest = now - CHART_MAX_LOOKBACK_S;
-      if (t0 < earliest) {
-        t0 = earliest;
-        t1 = Math.min(t0 + span, now);
+    if (isCustomRange()) {
+      seedCustomRangeDefaults();
+      setCustomRangeVisible(true);
+      setChartLive(true);
+    } else {
+      setCustomRangeVisible(false);
+      // Při změně délky okna zachovat konec (živě / aktuální t1).
+      if (!state.chartLive && state.chartRange.t1 > 0) {
+        const hours = currentRangeHours();
+        const span = hours * 3600;
+        const now = Date.now() / 1000;
+        let t1 = Math.min(state.chartRange.t1, now);
+        let t0 = t1 - span;
+        const earliest = now - CHART_MAX_LOOKBACK_S;
+        if (t0 < earliest) {
+          t0 = earliest;
+          t1 = Math.min(t0 + span, now);
+        }
+        state.chartStart = t0;
+        if (t1 >= now - 1.5) setChartLive(true);
       }
-      state.chartStart = t0;
-      if (t1 >= now - 1.5) setChartLive(true);
     }
     const { t0, t1, hours } = selectedHistoryRange();
     applyHistoryTimeRange(t0, t1, hours);
     syncDisplayToggleUi();
     refreshHistory();
   });
+  $("rangeFromDate")?.addEventListener("change", applyCustomRangeFromInputs);
+  $("rangeFromTime")?.addEventListener("change", applyCustomRangeFromInputs);
+  $("rangeToDate")?.addEventListener("change", applyCustomRangeFromInputs);
+  $("rangeToTime")?.addEventListener("change", applyCustomRangeFromInputs);
+  for (const id of ["rangeFromDate", "rangeFromTime", "rangeToDate", "rangeToTime"]) {
+    $(id)?.addEventListener("click", (ev) => {
+      const el = ev.currentTarget;
+      if (typeof el.showPicker === "function") {
+        try {
+          el.showPicker();
+        } catch (_) {
+          /* ignore — prohlížeč může vyžadovat přímý user gesture na ikoně */
+        }
+      }
+    });
+  }
   $("metricSelect").addEventListener("change", refreshHistory);
   $("chartLiveBtn")?.addEventListener("click", () => {
     setChartLive(true);
     const { t0, t1, hours } = selectedHistoryRange();
+    if (isCustomRange()) syncCustomRangeInputs(t0, t1);
     applyHistoryTimeRange(t0, t1, hours);
     refreshHistory();
   });
