@@ -466,6 +466,22 @@ function syncDisplayToggleUi() {
   if (st) st.setAttribute("aria-checked", state.display.tonalPenalty ? "true" : "false");
   if (sf) sf.setAttribute("aria-checked", state.display.limitFreqFilter ? "true" : "false");
 
+  document.querySelectorAll(".display-toggle").forEach((row) => {
+    const kind = row.getAttribute("data-switch");
+    let on = false;
+    if (kind === "window") on = !!state.display.windowCorr;
+    else if (kind === "tonal") on = !!state.display.tonalPenalty;
+    else if (kind === "limitFreq") on = !!state.display.limitFreqFilter;
+    row.classList.toggle("is-on", on);
+  });
+
+  const fab = $("settingsFab");
+  const anyActive =
+    state.display.windowCorr ||
+    state.display.tonalPenalty ||
+    state.display.limitFreqFilter;
+  fab?.classList.toggle("has-active", !!anyActive);
+
   const wDb = state.display.windowDb;
   const tDb = state.display.tonalDb;
   const windowTip =
@@ -2091,6 +2107,7 @@ function bind() {
   });
 
   bindDisplayToggles();
+  bindSettingsPanel();
 
   const aircraftRow = $("aircraftTimeline");
   aircraftRow?.addEventListener("click", (ev) => {
@@ -2153,6 +2170,47 @@ setInterval(refreshLatest, 2000);
 setInterval(() => {
   if (state.chartLive && !state.chartPanning) refreshHistory();
 }, 15000);
+
+function isSettingsOpen() {
+  const panel = $("settingsPanel");
+  return !!(panel && !panel.hidden);
+}
+
+function setSettingsOpen(open) {
+  const panel = $("settingsPanel");
+  const backdrop = $("settingsBackdrop");
+  const fab = $("settingsFab");
+  if (!panel || !fab) return;
+  const next = !!open;
+  panel.hidden = !next;
+  if (backdrop) backdrop.hidden = !next;
+  fab.setAttribute("aria-expanded", next ? "true" : "false");
+  fab.classList.toggle("is-open", next);
+  if (!next) {
+    document.querySelectorAll(".display-toggle.is-tip-open").forEach((w) => {
+      w.classList.remove("is-tip-open");
+    });
+  }
+}
+
+function bindSettingsPanel() {
+  const fab = $("settingsFab");
+  const closeBtn = $("settingsClose");
+  const backdrop = $("settingsBackdrop");
+  if (!fab) return;
+
+  fab.addEventListener("click", () => {
+    setSettingsOpen(!isSettingsOpen());
+  });
+  closeBtn?.addEventListener("click", () => setSettingsOpen(false));
+  backdrop?.addEventListener("click", () => setSettingsOpen(false));
+
+  document.addEventListener("keydown", (ev) => {
+    if (ev.key !== "Escape" || !isSettingsOpen()) return;
+    setSettingsOpen(false);
+    fab.focus();
+  });
+}
 
 function bindDisplayToggles() {
   const LONG_MS = 520;

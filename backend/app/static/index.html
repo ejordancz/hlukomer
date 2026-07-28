@@ -9,7 +9,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,700&family=IBM+Plex+Mono:wght@400;500&family=Sora:wght@400;500;600&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/static/style.css?v=57" />
+  <link rel="stylesheet" href="/static/style.css?v=62" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@mdi/font@7.4.47/css/materialdesignicons.min.css" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.9/dist/chart.umd.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
@@ -33,74 +33,6 @@
       </div>
     </div>
     <div class="top-right">
-      <div class="display-toggles" id="displayToggles">
-        <div class="display-toggle" data-switch="window">
-          <div class="pill-switch-wrap">
-            <button
-              type="button"
-              class="pill-switch"
-              id="switchWindow"
-              role="switch"
-              aria-checked="true"
-              aria-labelledby="labelWindowCorr"
-              aria-describedby="descWindowCorr"
-            >
-              <span class="pill-switch-thumb" aria-hidden="true"></span>
-            </button>
-          </div>
-          <span class="display-toggle-label" id="labelWindowCorr">Korekce měření u okna</span>
-          <div class="display-toggle-tip" id="tipWindowCorr" role="tooltip">
-            Odečte od naměřených hodnot 3 dB. Zvuk přímo u zdi je silnější kvůli odrazu od skla a fasády. Tímto získáte reálnou hladinu hluku ve volném prostoru 2 metry před oknem.
-          </div>
-          <span class="visually-hidden" id="descWindowCorr">
-            Odečte od naměřených hodnot 3 dB. Zvuk přímo u zdi je silnější kvůli odrazu od skla a fasády. Tímto získáte reálnou hladinu hluku ve volném prostoru 2 metry před oknem.
-          </span>
-        </div>
-        <div class="display-toggle" data-switch="tonal">
-          <div class="pill-switch-wrap">
-            <button
-              type="button"
-              class="pill-switch"
-              id="switchTonal"
-              role="switch"
-              aria-checked="false"
-              aria-labelledby="labelTonalCorr"
-              aria-describedby="descTonalCorr"
-            >
-              <span class="pill-switch-thumb" aria-hidden="true"></span>
-            </button>
-          </div>
-          <span class="display-toggle-label" id="labelTonalCorr">Aplikovat penalizaci za tónový hluk</span>
-          <div class="display-toggle-tip" id="tipTonalCorr" role="tooltip">
-            Sníží hygienické limity o 5 dB. Zapněte, pokud hluk obsahuje výrazný otravný tón (např. hučení na jedné frekvenci z větrání či čerpadla).
-          </div>
-          <span class="visually-hidden" id="descTonalCorr">
-            Sníží hygienické limity o 5 dB. Zapněte, pokud hluk obsahuje výrazný otravný tón (např. hučení na jedné frekvenci z větrání či čerpadla).
-          </span>
-        </div>
-        <div class="display-toggle" data-switch="limitFreq">
-          <div class="pill-switch-wrap">
-            <button
-              type="button"
-              class="pill-switch"
-              id="switchLimitFreq"
-              role="switch"
-              aria-checked="false"
-              aria-labelledby="labelLimitFreq"
-              aria-describedby="descLimitFreq"
-            >
-              <span class="pill-switch-thumb" aria-hidden="true"></span>
-            </button>
-          </div>
-          <span class="display-toggle-label" id="labelLimitFreq">Limit vyhodnocovat pouze pro frekvence 25Hz, 200Hz, 250Hz</span>
-          <div class="display-toggle-tip" id="tipLimitFreq" role="tooltip">
-            Překročení limitu se počítá jen když je dominantní pásmo 25, 200 nebo 250 Hz (typicky vzduchotechnika). Jinak se LAeq zobrazí šedě a do statistiky nad limitem se nezapočítá.
-          </div>
-          <span class="visually-hidden" id="descLimitFreq">
-            Překročení limitu se počítá jen když je dominantní pásmo 25, 200 nebo 250 Hz (typicky vzduchotechnika). Jinak se LAeq zobrazí šedě a do statistiky nad limitem se nezapočítá.
-          </span>
-        </div>
-      </div>
       <div class="status" id="status" title="Stav připojení">
         <span class="dot" id="onlineDot"></span>
         <span id="onlineLabel" hidden></span>
@@ -283,6 +215,110 @@
     </div>
   </footer>
 
-  <script src="/static/app.js?v=52"></script>
+  <div class="settings-backdrop" id="settingsBackdrop" hidden></div>
+  <div
+    class="settings-panel"
+    id="settingsPanel"
+    role="dialog"
+    aria-modal="true"
+    aria-labelledby="settingsTitle"
+    hidden
+  >
+    <div class="settings-panel-glow" aria-hidden="true"></div>
+    <div class="settings-panel-head">
+      <div class="settings-panel-head-text">
+        <p class="settings-kicker">Korekce zobrazení</p>
+        <h2 class="settings-panel-title" id="settingsTitle">Nastavení</h2>
+      </div>
+      <button type="button" class="settings-close" id="settingsClose" aria-label="Zavřít nastavení">
+        <span class="mdi mdi-close" aria-hidden="true"></span>
+      </button>
+    </div>
+    <div class="display-toggles" id="displayToggles">
+      <div class="display-toggle" data-switch="window">
+        <div class="pill-switch-wrap">
+          <button
+            type="button"
+            class="pill-switch"
+            id="switchWindow"
+            role="switch"
+            aria-checked="true"
+            aria-labelledby="labelWindowCorr"
+            aria-describedby="descWindowCorr"
+          >
+            <span class="pill-switch-thumb" aria-hidden="true"></span>
+          </button>
+        </div>
+        <span class="display-toggle-label" id="labelWindowCorr">Korekce měření u okna</span>
+        <div class="display-toggle-tip" id="tipWindowCorr" role="tooltip">
+          Odečte od naměřených hodnot 3 dB. Zvuk přímo u zdi je silnější kvůli odrazu od skla a fasády. Tímto získáte reálnou hladinu hluku ve volném prostoru 2 metry před oknem.
+        </div>
+        <span class="visually-hidden" id="descWindowCorr">
+          Odečte od naměřených hodnot 3 dB. Zvuk přímo u zdi je silnější kvůli odrazu od skla a fasády. Tímto získáte reálnou hladinu hluku ve volném prostoru 2 metry před oknem.
+        </span>
+      </div>
+      <div class="display-toggle" data-switch="tonal">
+        <div class="pill-switch-wrap">
+          <button
+            type="button"
+            class="pill-switch"
+            id="switchTonal"
+            role="switch"
+            aria-checked="false"
+            aria-labelledby="labelTonalCorr"
+            aria-describedby="descTonalCorr"
+          >
+            <span class="pill-switch-thumb" aria-hidden="true"></span>
+          </button>
+        </div>
+        <span class="display-toggle-label" id="labelTonalCorr">Aplikovat penalizaci za tónový hluk</span>
+        <div class="display-toggle-tip" id="tipTonalCorr" role="tooltip">
+          Sníží hygienické limity o 5 dB. Zapněte, pokud hluk obsahuje výrazný otravný tón (např. hučení na jedné frekvenci z větrání či čerpadla).
+        </div>
+        <span class="visually-hidden" id="descTonalCorr">
+          Sníží hygienické limity o 5 dB. Zapněte, pokud hluk obsahuje výrazný otravný tón (např. hučení na jedné frekvenci z větrání či čerpadla).
+        </span>
+      </div>
+      <div class="display-toggle" data-switch="limitFreq">
+        <div class="pill-switch-wrap">
+          <button
+            type="button"
+            class="pill-switch"
+            id="switchLimitFreq"
+            role="switch"
+            aria-checked="false"
+            aria-labelledby="labelLimitFreq"
+            aria-describedby="descLimitFreq"
+          >
+            <span class="pill-switch-thumb" aria-hidden="true"></span>
+          </button>
+        </div>
+        <span class="display-toggle-label" id="labelLimitFreq">Limit vyhodnocovat pouze pro frekvence 25Hz, 200Hz, 250Hz</span>
+        <div class="display-toggle-tip" id="tipLimitFreq" role="tooltip">
+          Překročení limitu se počítá jen když je dominantní pásmo 25, 200 nebo 250 Hz (typicky vzduchotechnika). Jinak se LAeq zobrazí šedě a do statistiky nad limitem se nezapočítá.
+        </div>
+        <span class="visually-hidden" id="descLimitFreq">
+          Překročení limitu se počítá jen když je dominantní pásmo 25, 200 nebo 250 Hz (typicky vzduchotechnika). Jinak se LAeq zobrazí šedě a do statistiky nad limitem se nezapočítá.
+        </span>
+      </div>
+    </div>
+  </div>
+  <button
+    type="button"
+    class="settings-fab"
+    id="settingsFab"
+    aria-label="Nastavení"
+    aria-controls="settingsPanel"
+    aria-expanded="false"
+  >
+    <span class="settings-fab-ring" aria-hidden="true"></span>
+    <span class="settings-fab-pulse" aria-hidden="true"></span>
+    <span class="settings-fab-icons" aria-hidden="true">
+      <span class="mdi mdi-cog settings-fab-icon settings-fab-icon-cog"></span>
+      <span class="mdi mdi-close settings-fab-icon settings-fab-icon-close"></span>
+    </span>
+  </button>
+
+  <script src="/static/app.js?v=55"></script>
 </body>
 </html>
