@@ -293,12 +293,12 @@
             <span class="pill-switch-thumb" aria-hidden="true"></span>
           </button>
         </div>
-        <span class="display-toggle-label" id="labelLimitFreq">Limit vyhodnocovat pouze pro frekvence 25Hz, 200Hz, 250Hz</span>
+        <span class="display-toggle-label" id="labelLimitFreq">Odstranění šumu</span>
         <div class="display-toggle-tip" id="tipLimitFreq" role="tooltip">
-          Překročení limitu se počítá jen když je dominantní pásmo 25, 200 nebo 250 Hz (typicky vzduchotechnika). Jinak se LAeq zobrazí šedě a do statistiky nad limitem se nezapočítá.
+          Ignoruje úseky, kde není dominantní 25 / 200 / 250 Hz (typicky VZT), a krátké peaky mimo běžný hluk. Šedé překročení se do statistiky nezapočítá.
         </div>
         <span class="visually-hidden" id="descLimitFreq">
-          Překročení limitu se počítá jen když je dominantní pásmo 25, 200 nebo 250 Hz (typicky vzduchotechnika). Jinak se LAeq zobrazí šedě a do statistiky nad limitem se nezapočítá.
+          Ignoruje úseky, kde není dominantní 25 / 200 / 250 Hz (typicky VZT), a krátké peaky mimo běžný hluk. Šedé překročení se do statistiky nezapočítá.
         </span>
       </div>
     </div>
@@ -319,6 +319,6 @@
     </span>
   </button>
 
-  <script src="/static/app.js?v=55"></script>
+  <script src="/static/app.js?v=58"></script>
 </body>
 </html>

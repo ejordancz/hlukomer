@@ -58,13 +58,28 @@ const CHART_SPEC_HEIGHT = 288;
 const CHART_EXCESS_HEIGHT = Math.round(CHART_SPEC_HEIGHT / 4);
 /** Barva sloupců překročení + čtvereček v tooltipu. */
 const CHART_EXCESS_COLOR = "#e85d4c";
-/** Sloupce překročení mimo sledované frekvence (filtr zapnutý). */
+/** Sloupce překročení vyřazené odstraněním šumu (filtr zapnutý). */
 const CHART_EXCESS_SKIPPED_COLOR = "rgba(150, 162, 158, 0.42)";
 /** Spektrogram pod hlavním grafem jen pro rozsah ≤ 48 h. */
 const CHART_SPEC_MAX_HOURS = 48;
 
 /** Dominantní pásma, pro která se při filtru vyhodnocuje limit (Hz). */
 const LIMIT_EVAL_HZ = new Set([25, 200, 250]);
+
+/**
+ * Detekce přechodných peaků (Odstranění šumu):
+ * 1) širší ambient (medián ± okno) + MAD práh
+ * 2) lokální spike vůči mediánu ±PEAK_LOCAL_HALF_S (chytí i mírnější jehly)
+ * Souvislý úsek nad prahem delší než PEAK_MAX_RUN_S = trvalý hluk (ne peak).
+ */
+const PEAK_HALF_WINDOW_S = 30 * 60;
+const PEAK_LOCAL_HALF_S = 6 * 60;
+const PEAK_MARGIN_MIN_DB = 2.5;
+const PEAK_LOCAL_MARGIN_DB = 2.0;
+const PEAK_MAD_K = 2.0;
+const PEAK_MAX_RUN_S = 8 * 60;
+const PEAK_MIN_SAMPLES = 5;
+const PEAK_DILATE_SAMPLES = 1;
 
 const LS_WINDOW_CORR = "hlk.corr.window";
 const LS_TONAL_CORR = "hlk.corr.tonal";
@@ -128,13 +143,15 @@ const state = {
   display: {
     windowCorr: readLsBool(LS_WINDOW_CORR, true),
     tonalPenalty: readLsBool(LS_TONAL_CORR, false),
-    /** Limit jen při dominantě 25 / 200 / 250 Hz. */
+    /** Odstranění šumu: dominanta 25/200/250 Hz + filtr přechodných peaků. */
     limitFreqFilter: readLsBool(LS_LIMIT_FREQ, false),
     windowDb: _displayCfg.windowDb,
     tonalDb: _displayCfg.tonalDb,
   },
   lastLatest: null,
   lastHistory: null,
+  /** Cache peak-masky pro aktuální history points. */
+  peakMask: null,
 };
 
 const CHART_MAX_LOOKBACK_S = 90 * 24 * 3600;
@@ -394,23 +411,205 @@ function dominantHzAtTime(tSec) {
   return dominantHzFromSpecValues(col.v);
 }
 
-/**
- * Má se v daném okamžiku vyhodnocovat překročení limitu?
- * Filtr vypnutý → vždy ano. Zapnutý → jen dominantní 25/200/250 Hz.
- * Bez spektrogramu (např. rozsah > 48 h) → filtr se neaplikuje.
- * Bod bez blízkého spektra → nehodnotit.
- */
-function shouldEvaluateLimitAt(tSec) {
-  if (!state.display.limitFreqFilter) return true;
-  const cols = state.chartSpectrogram?.columns;
-  if (!cols?.length) return true;
-  const hz = dominantHzAtTime(tSec);
-  if (hz == null) return false;
-  return isLimitEvalHz(hz);
+function medianSorted(sorted) {
+  const n = sorted.length;
+  if (!n) return null;
+  const mid = n >> 1;
+  return n % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
 }
 
-function liveShouldEvaluateLimit() {
-  if (!state.display.limitFreqFilter) return true;
+function medianOf(values) {
+  if (!values?.length) return null;
+  return medianSorted([...values].sort((a, b) => a - b));
+}
+
+function madOf(values, med) {
+  if (!values?.length || med == null) return 0;
+  const devs = values.map((v) => Math.abs(v - med)).sort((a, b) => a - b);
+  return medianSorted(devs) || 0;
+}
+
+function peakThresholdDb(med, mad) {
+  return med + Math.max(PEAK_MARGIN_MIN_DB, PEAK_MAD_K * 1.4826 * mad);
+}
+
+function historyPointsCacheKey(points) {
+  if (!points?.length) return "empty";
+  const a = points[0];
+  const b = points[points.length - 1];
+  const mid = points[points.length >> 1];
+  return `${points.length}:${a.t}:${a.v}:${mid?.t}:${mid?.v}:${b.t}:${b.v}:${windowOffset()}`;
+}
+
+/** Binární hledání prvního indexu s t >= target (points seřazené). */
+function lowerBoundTs(points, target) {
+  let lo = 0;
+  let hi = points.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (points[mid].t < target) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo;
+}
+
+/** Medián / hodnoty v časovém okně kolem indexu i (s volitelným stride). */
+function windowLevelsAround(points, levels, i, halfWinS, { maxSamples = 120, excludeI = false } = {}) {
+  const t = points[i].t;
+  const lo = lowerBoundTs(points, t - halfWinS);
+  let hi = lowerBoundTs(points, t + halfWinS);
+  while (hi < points.length && points[hi].t <= t + halfWinS) hi += 1;
+  const span = hi - lo;
+  if (span <= 0) return [];
+  const step = Math.max(1, Math.ceil(span / maxSamples));
+  const out = [];
+  for (let j = lo; j < hi; j += step) {
+    if (excludeI && j === i) continue;
+    if (levels[j] != null) out.push(levels[j]);
+  }
+  return out;
+}
+
+/**
+ * Postaví sadu časů přechodných peaků pro history points.
+ * @returns {Set<number>}
+ */
+function buildPeakTimeSet(points) {
+  const times = new Set();
+  if (!points?.length) return times;
+
+  const levels = new Array(points.length);
+  for (let i = 0; i < points.length; i++) {
+    const v = points[i].v;
+    levels[i] =
+      v == null || Number.isNaN(Number(v)) ? null : applyWindow(Number(v));
+  }
+
+  const candidate = new Array(points.length).fill(false);
+
+  for (let i = 0; i < points.length; i++) {
+    const level = levels[i];
+    if (level == null) continue;
+
+    // Širší ambient (odolný vůči jednotlivým spike).
+    const wide = windowLevelsAround(points, levels, i, PEAK_HALF_WINDOW_S, {
+      maxSamples: 120,
+    });
+    if (wide.length >= PEAK_MIN_SAMPLES) {
+      const med = medianOf(wide);
+      if (med != null && level > peakThresholdDb(med, madOf(wide, med))) {
+        candidate[i] = true;
+      }
+    }
+
+    // Lokální jehla vůči blízkému okolí (chytí i peaky ~+2–3 dB).
+    if (!candidate[i]) {
+      const local = windowLevelsAround(points, levels, i, PEAK_LOCAL_HALF_S, {
+        maxSamples: 40,
+        excludeI: true,
+      });
+      if (local.length >= 3) {
+        const medL = medianOf(local);
+        if (medL != null && level > medL + PEAK_LOCAL_MARGIN_DB) {
+          candidate[i] = true;
+        }
+      }
+    }
+  }
+
+  // Souvislé úseky delší než PEAK_MAX_RUN_S = trvalý hluk, ne peak.
+  const peakIdx = new Array(points.length).fill(false);
+  let runStart = -1;
+  const flushRun = (endExcl) => {
+    if (runStart < 0) return;
+    const dur = points[endExcl - 1].t - points[runStart].t;
+    if (dur <= PEAK_MAX_RUN_S) {
+      for (let j = runStart; j < endExcl; j++) {
+        if (candidate[j]) peakIdx[j] = true;
+      }
+    }
+    runStart = -1;
+  };
+  for (let i = 0; i < points.length; i++) {
+    if (candidate[i]) {
+      if (runStart < 0) runStart = i;
+    } else {
+      flushRun(i);
+    }
+  }
+  flushRun(points.length);
+
+  // Dilatace — zachytí ramena špičky.
+  if (PEAK_DILATE_SAMPLES > 0) {
+    const dilated = peakIdx.slice();
+    for (let i = 0; i < points.length; i++) {
+      if (!peakIdx[i]) continue;
+      for (let d = 1; d <= PEAK_DILATE_SAMPLES; d++) {
+        if (i - d >= 0) dilated[i - d] = true;
+        if (i + d < points.length) dilated[i + d] = true;
+      }
+    }
+    for (let i = 0; i < points.length; i++) peakIdx[i] = dilated[i];
+  }
+
+  for (let i = 0; i < points.length; i++) {
+    if (peakIdx[i]) times.add(points[i].t);
+  }
+
+  return times;
+}
+
+function ensurePeakMask() {
+  const points = state.lastHistory?.points;
+  const key = historyPointsCacheKey(points);
+  if (state.peakMask?.key === key) return state.peakMask;
+  state.peakMask = { key, times: buildPeakTimeSet(points || []) };
+  return state.peakMask;
+}
+
+function isTransientPeakAt(tSec) {
+  if (!state.display.limitFreqFilter) return false;
+  const mask = ensurePeakMask();
+  if (!mask.times.size) return false;
+  if (mask.times.has(tSec)) return true;
+  const points = state.lastHistory?.points;
+  if (!points?.length) return false;
+  const i = lowerBoundTs(points, tSec);
+  const candidates = [];
+  if (i < points.length) candidates.push(points[i]);
+  if (i > 0) candidates.push(points[i - 1]);
+  for (const p of candidates) {
+    if (Math.abs(p.t - tSec) <= 1.5 && mask.times.has(p.t)) return true;
+  }
+  return false;
+}
+
+/** Live: peak vůči ambientu z recent history (stejný práh jako u grafu). */
+function liveIsTransientPeak(level) {
+  if (!state.display.limitFreqFilter || level == null || Number.isNaN(Number(level))) {
+    return false;
+  }
+  const points = state.lastHistory?.points;
+  if (!points?.length) return false;
+  const now = Date.now() / 1000;
+  const vals = [];
+  for (let i = points.length - 1; i >= 0; i--) {
+    const p = points[i];
+    if (p.t < now - PEAK_HALF_WINDOW_S) break;
+    if (p.v == null || Number.isNaN(Number(p.v))) continue;
+    vals.push(applyWindow(Number(p.v)));
+  }
+  if (vals.length < PEAK_MIN_SAMPLES) return false;
+  const med = medianOf(vals);
+  if (med == null) return false;
+  if (Number(level) > peakThresholdDb(med, madOf(vals, med))) return true;
+  // Lokální práh vůči recent samples.
+  const local = vals.slice(0, Math.min(vals.length, 20));
+  const medL = medianOf(local);
+  return medL != null && Number(level) > medL + PEAK_LOCAL_MARGIN_DB;
+}
+
+function liveDominantHzOk() {
   const analysis = state.lastLatest?.analysis || state.lastLatest?.spectrum;
   if (analysis?.dominant_hz != null) return isLimitEvalHz(analysis.dominant_hz);
   const bands = analysis?.bands || state.lastLatest?.spectrum?.bands;
@@ -427,6 +626,39 @@ function liveShouldEvaluateLimit() {
   }
   if (bestHz == null) return true;
   return isLimitEvalHz(bestHz);
+}
+
+/**
+ * Má se v daném okamžiku vyhodnocovat překročení limitu?
+ * Filtr vypnutý → vždy ano.
+ * Zapnutý → ne peak + (dominantní 25/200/250 Hz, pokud je spektrogram).
+ * Bez spektrogramu (např. rozsah > 48 h) → frekvenční část se neaplikuje.
+ * Bod bez blízkého spektra → frekvenčně nehodnotit.
+ */
+function shouldEvaluateLimitAt(tSec) {
+  if (!state.display.limitFreqFilter) return true;
+  if (isTransientPeakAt(tSec)) return false;
+  const cols = state.chartSpectrogram?.columns;
+  if (!cols?.length) return true;
+  const hz = dominantHzAtTime(tSec);
+  if (hz == null) return false;
+  return isLimitEvalHz(hz);
+}
+
+function liveShouldEvaluateLimit(level = null) {
+  if (!state.display.limitFreqFilter) return true;
+  const shown =
+    level != null
+      ? level
+      : state.lastLatest?.metrics?.laeq_1s != null
+        ? applyWindow(state.lastLatest.metrics.laeq_1s.value)
+        : null;
+  if (liveIsTransientPeak(shown)) return false;
+  return liveDominantHzOk();
+}
+
+function limitSkipLabel({ peak = false } = {}) {
+  return peak ? "přechodný peak (šum)" : "mimo sledované frekvence";
 }
 
 function thresholdAtTime(limitPts, tSec) {
@@ -491,8 +723,9 @@ function syncDisplayToggleUi() {
     `Sníží hygienické limity o ${tDb} dB. Zapněte, pokud hluk obsahuje výrazný otravný tón ` +
     `(např. hučení na jedné frekvenci z větrání či čerpadla).`;
   const limitFreqTip =
-    "Překročení limitu se počítá jen když je dominantní pásmo 25, 200 nebo 250 Hz (typicky vzduchotechnika). " +
-    "Jinak se LAeq zobrazí šedě a do statistiky nad limitem se nezapočítá.";
+    "Ignoruje úseky, kde není dominantní pásmo 25, 200 nebo 250 Hz (typicky VZT), " +
+    "a krátké peaky mimo běžný ambientní hluk. " +
+    "Šedé překročení se do statistiky nad limitem nezapočítá.";
   const tipW = $("tipWindowCorr");
   const tipT = $("tipTonalCorr");
   const tipF = $("tipLimitFreq");
@@ -542,14 +775,17 @@ function applyLatestDisplay() {
   if (live) {
     const shown = applyWindow(live.value);
     const txt = fmtDb(shown);
-    const evalOk = liveShouldEvaluateLimit();
+    const evalOk = liveShouldEvaluateLimit(shown);
     document.querySelectorAll(".js-live-level").forEach((el) => {
       el.textContent = txt;
       setLevelClass(el, shown, lim, { evaluate: evalOk });
     });
     const age = Math.max(0, Math.round(Date.now() / 1000 - live.ts));
     setAllText(".js-live-meta", fmtAge(age));
-    updateOverLimit(shown, lim, { evaluate: evalOk });
+    updateOverLimit(shown, lim, {
+      evaluate: evalOk,
+      peak: liveIsTransientPeak(shown),
+    });
   } else {
     updateOverLimit(null, lim);
   }
@@ -583,7 +819,7 @@ function computeDisplayStats(points, limitPts) {
     const level = applyWindow(p.v);
     const lim = effectiveLimit(thresholdAtTime(limitPts, p.t));
     const over = level > lim;
-    // Stejný vzorek jako u % nad limitem: pod limitem, nebo dominanta 25/200/250 Hz.
+    // Pod limitem, nebo po odstranění šumu (frekvence / peak).
     if (over && !shouldEvaluateLimitAt(p.t)) continue;
     sum += level;
     if (level < min) min = level;
@@ -609,6 +845,7 @@ function applyHistoryDisplay({ refetchSpec = true } = {}) {
   state.nightBands = data.night_bands || [];
   state.weatherTimeline = data.weather_timeline || [];
   state.aircraftOverflights = data.aircraft_overflights || [];
+  state.peakMask = null;
   setAircraftUiVisible(data.aircraft?.show_ui !== false);
   if (
     state.aircraftPopupId != null &&
@@ -738,7 +975,7 @@ function fmtAge(ageSec) {
   return `naposledy před ${Math.round(ageSec / 3600)} h`;
 }
 
-function updateOverLimit(laeq, limit = null, { evaluate = true } = {}) {
+function updateOverLimit(laeq, limit = null, { evaluate = true, peak = false } = {}) {
   const periodLabel = state.period === "night" ? "noc" : "den";
   const labels = document.querySelectorAll(".js-over-label");
   const values = document.querySelectorAll(".js-over-value");
@@ -769,7 +1006,7 @@ function updateOverLimit(laeq, limit = null, { evaluate = true } = {}) {
       el.classList.add("is-uneval");
     });
     subs.forEach((el) => {
-      el.textContent = "mimo sledované frekvence";
+      el.textContent = limitSkipLabel({ peak });
     });
     return;
   }
