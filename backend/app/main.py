@@ -1289,13 +1289,20 @@ def history(
     values = [p["v"] for p in points]
     stats: dict[str, Any] = {}
     if values:
-        above = sum(1 for p in points if p["v"] >= threshold_at(p["t"]))
+        excesses: list[float] = []
+        above = 0
+        for p in points:
+            lim = threshold_at(p["t"])
+            if p["v"] >= lim:
+                above += 1
+                excesses.append(float(p["v"]) - float(lim))
         stats = {
             "min": min(values),
             "max": max(values),
             "avg": sum(values) / len(values),
             "count": len(values),
             "above_threshold_pct": 100.0 * above / len(values),
+            "avg_excess_db": (sum(excesses) / len(excesses)) if excesses else 0.0,
         }
 
     meta = threshold_meta()

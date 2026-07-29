@@ -979,7 +979,7 @@ main {
 
 .history > .stats {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(5, 1fr);
   gap: 0.75rem 1rem;
   box-sizing: border-box;
   margin: -0.35rem 0 1.35rem;

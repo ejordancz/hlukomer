@@ -807,12 +807,19 @@ function mapBandsWindow(bands) {
 
 function computeDisplayStats(points, limitPts) {
   if (!points?.length) {
-    return { avg: null, min: null, max: null, above_threshold_pct: null };
+    return {
+      avg: null,
+      min: null,
+      max: null,
+      above_threshold_pct: null,
+      avg_excess_db: null,
+    };
   }
   let sum = 0;
   let min = Infinity;
   let max = -Infinity;
   let above = 0;
+  let excessSum = 0;
   let n = 0;
   for (const p of points) {
     if (p.v == null || Number.isNaN(Number(p.v))) continue;
@@ -824,15 +831,27 @@ function computeDisplayStats(points, limitPts) {
     sum += level;
     if (level < min) min = level;
     if (level > max) max = level;
-    if (over) above += 1;
+    if (over) {
+      above += 1;
+      excessSum += level - lim;
+    }
     n += 1;
   }
-  if (!n) return { avg: null, min: null, max: null, above_threshold_pct: null };
+  if (!n) {
+    return {
+      avg: null,
+      min: null,
+      max: null,
+      above_threshold_pct: null,
+      avg_excess_db: null,
+    };
+  }
   return {
     avg: sum / n,
     min,
     max,
     above_threshold_pct: (100 * above) / n,
+    avg_excess_db: above ? excessSum / above : 0,
   };
 }
 
@@ -895,6 +914,11 @@ function applyHistoryDisplay({ refetchSpec = true } = {}) {
   $("statMin").textContent = s.min != null ? `${fmtDb(s.min)} dBA` : "—";
   $("statMax").textContent = s.max != null ? `${fmtDb(s.max)} dBA` : "—";
   $("statAbove").textContent = fmtPct(s.above_threshold_pct);
+  const avgEx = s.avg_excess_db;
+  $("statAvgExcess").textContent =
+    avgEx != null && !Number.isNaN(Number(avgEx))
+      ? `+${fmtDb(avgEx)} dB`
+      : "—";
 
   syncDisplayToggleUi();
   if (refetchSpec) {
