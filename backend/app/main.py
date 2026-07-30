@@ -58,11 +58,19 @@ ALERT_DAY_END_HOUR = int(os.getenv("ALERT_DAY_END_HOUR", "22"))
 # Jen zobrazení na dashboardu (neovlivní DB / API metriky)
 DISPLAY_WINDOW_CORRECTION_DB = float(os.getenv("DISPLAY_WINDOW_CORRECTION_DB", "3"))
 DISPLAY_TONAL_PENALTY_DB = float(os.getenv("DISPLAY_TONAL_PENALTY_DB", "5"))
+APP_ENV = (os.getenv("APP_ENV", "DEV") or "DEV").strip().upper()
+if APP_ENV not in {"DEV", "PROD"}:
+    logger.warning("Unknown APP_ENV=%r, falling back to DEV", APP_ENV)
+    APP_ENV = "DEV"
 TZ_NAME = os.getenv("TZ", "Europe/Prague")
 TZ = ZoneInfo(TZ_NAME)
 RETENTION_DAYS = storage.RETENTION_DAYS
 
 STATIC_DIR = Path(__file__).parent / "static"
+TIANJI_TRACKER_SCRIPT = (
+    '<script async defer src="https://tianji.ejordan.cz/tracker.js" '
+    'data-website-id="cms78kn1z0k4lurf4uhwzjzu7"></script>'
+)
 
 # Spektrum: 1/3-oktáva 25–250 Hz + oktávy 500 Hz–16 kHz (pořadí = ESP spectrum[])
 SPECTRUM_BANDS: tuple[str, ...] = (
@@ -1509,6 +1517,11 @@ def index() -> HTMLResponse:
         html = html.replace("<!-- DISPLAY_CONFIG -->", config_script, 1)
     else:
         html = html.replace("</head>", f"{config_script}\n</head>", 1)
+    tracker_script = TIANJI_TRACKER_SCRIPT if APP_ENV == "PROD" else ""
+    if "<!-- TRACKER_SCRIPT -->" in html:
+        html = html.replace("<!-- TRACKER_SCRIPT -->", tracker_script, 1)
+    elif tracker_script:
+        html = html.replace("</head>", f"{tracker_script}\n</head>", 1)
     return HTMLResponse(html)
 
 
