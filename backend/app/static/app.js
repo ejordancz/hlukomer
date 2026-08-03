@@ -63,6 +63,12 @@ const CHART_EXCESS_SKIPPED_COLOR = "rgba(150, 162, 158, 0.42)";
 /** Spektrogram pod hlavním grafem jen pro rozsah ≤ 48 h. */
 const CHART_SPEC_MAX_HOURS = 48;
 
+const CHART_DBA_COLOR = "#7ec8a3";
+const CHART_DBA_FILL = "rgba(126, 200, 163, 0.12)";
+/** Napětí křivky dBA; při ořezu šumu vyšší → plynulejší mosty přes mezery. */
+const CHART_DBA_TENSION = 0.25;
+const CHART_DBA_TENSION_DENOISED = 0.45;
+
 /** Dominantní pásma, pro která se při filtru vyhodnocuje limit (Hz). */
 const LIMIT_EVAL_HZ = new Set([25, 200, 250]);
 
@@ -567,6 +573,33 @@ function ensurePeakMask() {
   return state.peakMask;
 }
 
+/**
+ * Naměřená řada bez přechodných peaků: šumové body se vynechají,
+ * zbylé body Chart.js propojí plynule (vyšší tension).
+ */
+function buildDenoisedMeasured(points, measuredData) {
+  const n = measuredData?.length || 0;
+  if (!n || !points?.length || points.length !== n) {
+    return measuredData ? measuredData.slice() : [];
+  }
+  const peakTimes = ensurePeakMask().times;
+  if (!peakTimes.size) {
+    return measuredData.map((p) => ({ x: p.x, y: p.y }));
+  }
+
+  const out = [];
+  for (let i = 0; i < n; i++) {
+    if (peakTimes.has(points[i].t)) continue;
+    const src = measuredData[i];
+    out.push({ x: src.x, y: src.y });
+  }
+  return out.length ? out : measuredData.map((p) => ({ x: p.x, y: p.y }));
+}
+
+function chartDatasetByLabel(label) {
+  return state.chart?.data?.datasets?.find((d) => d.label === label) || null;
+}
+
 function isTransientPeakAt(tSec) {
   if (!state.display.limitFreqFilter) return false;
   const mask = ensurePeakMask();
@@ -725,6 +758,7 @@ function syncDisplayToggleUi() {
   const limitFreqTip =
     "Ignoruje úseky, kde není dominantní pásmo 25, 200 nebo 250 Hz (typicky VZT), " +
     "a krátké peaky mimo běžný ambientní hluk. " +
+    "V grafu ořízne šumové špičky a zbylé úseky plynule napojí. " +
     "Šedé překročení se do statistiky nad limitem nezapočítá.";
   const tipW = $("tipWindowCorr");
   const tipT = $("tipTonalCorr");
@@ -880,16 +914,26 @@ function applyHistoryDisplay({ refetchSpec = true } = {}) {
     x: p.t * 1000,
     y: applyWindow(p.v),
   }));
-  state.chart.data.datasets[0].data = measuredData;
-  // Neviditelná řada jen pro čtvereček v tooltipu (stejná barva jako mezigraf).
-  if (state.chart.data.datasets[2]) {
-    state.chart.data.datasets[2].data = measuredData;
-  }
+  const filterOn = !!state.display.limitFreqFilter;
+  const dbaDs = chartDatasetByLabel("dBA");
+  const limitDs = chartDatasetByLabel("limit");
+  const excessDs = chartDatasetByLabel("excess");
 
-  state.chart.data.datasets[1].data = limitPts.map((p) => ({
-    x: p.t * 1000,
-    y: effectiveLimit(p.v),
-  }));
+  if (dbaDs) {
+    dbaDs.data = filterOn
+      ? buildDenoisedMeasured(rawPoints, measuredData)
+      : measuredData;
+    dbaDs.tension = filterOn ? CHART_DBA_TENSION_DENOISED : CHART_DBA_TENSION;
+  }
+  // Neviditelná řada jen pro čtvereček v tooltipu (stejná barva jako mezigraf).
+  // Drží vždy surová naměřená data — i pro sloupcový graf překročení.
+  if (excessDs) excessDs.data = measuredData;
+  if (limitDs) {
+    limitDs.data = limitPts.map((p) => ({
+      x: p.t * 1000,
+      y: effectiveLimit(p.v),
+    }));
+  }
   state.chartTooltipKey = null;
 
   const range = selectedHistoryRange();
@@ -1253,10 +1297,10 @@ function initChart() {
         {
           label: "dBA",
           data: [],
-          borderColor: "#7ec8a3",
-          backgroundColor: "rgba(126, 200, 163, 0.12)",
+          borderColor: CHART_DBA_COLOR,
+          backgroundColor: CHART_DBA_FILL,
           fill: true,
-          tension: 0.25,
+          tension: CHART_DBA_TENSION,
           pointRadius: 0,
           borderWidth: 2,
         },
@@ -1905,7 +1949,7 @@ function drawChartExcess() {
   ctx.fillStyle = "#0a1010";
   ctx.fillRect(0, 0, w, h);
 
-  const pts = state.chart?.data?.datasets?.[0]?.data;
+  const pts = chartDatasetByLabel("excess")?.data;
   const { t0, t1 } = state.chartRange;
   const span = Math.max(1e-6, t1 - t0);
   if (!pts?.length) {
