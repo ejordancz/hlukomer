@@ -128,10 +128,29 @@ body {
   text-align: left;
   cursor: default;
   flex: 1;
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
 }
 
 .display-toggle.is-on .display-toggle-label {
   color: var(--ink);
+}
+
+.display-toggle-beta {
+  display: inline-block;
+  padding: 0.12rem 0.4rem;
+  border: 1px solid rgba(196, 240, 130, 0.35);
+  border-radius: 999px;
+  background: rgba(196, 240, 130, 0.12);
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: 0.58rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  line-height: 1.2;
 }
 
 .pill-switch-wrap {
@@ -1112,6 +1131,10 @@ main {
 
 .chart-spec-strip[hidden] {
   display: none;
+}
+
+.chart-fine-spec-strip {
+  margin-top: 0.45rem;
 }
 
 .chart-spec-unavailable {

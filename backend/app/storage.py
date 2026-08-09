@@ -43,7 +43,20 @@ SPECTRUM_BANDS: tuple[str, ...] = (
 )
 SPECTRUM_COLS: tuple[str, ...] = tuple(f"oct_{b}" for b in SPECTRUM_BANDS)
 
-LIVE_VALUE_COLS: tuple[str, ...] = ("laeq_1s", "lez_1s", "lfi_db", *SPECTRUM_COLS)
+# Jemné lineární pásma 5 Hz: 190, 195, …, 270 Hz (ESP spectrum_fine[]).
+FINE_SPECTRUM_HZ: tuple[int, ...] = tuple(range(190, 271, 5))
+FINE_SPECTRUM_BANDS: tuple[str, ...] = tuple(str(hz) for hz in FINE_SPECTRUM_HZ)
+FINE_SPECTRUM_COLS: tuple[str, ...] = tuple(
+    f"fine_{b}" for b in FINE_SPECTRUM_BANDS
+)
+
+LIVE_VALUE_COLS: tuple[str, ...] = (
+    "laeq_1s",
+    "lez_1s",
+    "lfi_db",
+    *SPECTRUM_COLS,
+    *FINE_SPECTRUM_COLS,
+)
 MINUTE_COLS: tuple[str, ...] = ("laeq_1min", "lamax_1min", "lamin_1min")
 
 META_ARCHIVE_RUN = "archive_last_run"
@@ -108,6 +121,21 @@ def table_exists(conn: sqlite3.Connection, name: str) -> bool:
     return row is not None
 
 
+def _table_columns(conn: sqlite3.Connection, table: str) -> set[str]:
+    return {str(r[1]) for r in conn.execute(f"PRAGMA table_info({table})")}
+
+
+def ensure_live_columns(conn: sqlite3.Connection) -> None:
+    """Doplní chybějící LIVE_VALUE_COLS do existujících wide tabulek (ALTER)."""
+    for table in ("samples_1s", "samples_5s"):
+        if not table_exists(conn, table):
+            continue
+        existing = _table_columns(conn, table)
+        for col in LIVE_VALUE_COLS:
+            if col not in existing:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} REAL")
+
+
 def ensure_wide_tables(conn: sqlite3.Connection) -> None:
     cols_1s = ",\n                ".join(f"{c} REAL" for c in LIVE_VALUE_COLS)
     cols_5s = cols_1s + ",\n                n_src INTEGER NOT NULL DEFAULT 1"
@@ -134,6 +162,7 @@ def ensure_wide_tables(conn: sqlite3.Connection) -> None:
         ) WITHOUT ROWID;
         """
     )
+    ensure_live_columns(conn)
 
 
 def upsert_sample_1s(
@@ -216,6 +245,8 @@ def ingest_live(
     lfi_db: Optional[float] = None,
     spectrum: Optional[list[float]] = None,
     spectrum_cols: Optional[tuple[str, ...]] = None,
+    spectrum_fine: Optional[list[float]] = None,
+    spectrum_fine_cols: Optional[tuple[str, ...]] = None,
 ) -> int:
     values: dict[str, Optional[float]] = {
         "laeq_1s": laeq_1s,
@@ -224,6 +255,9 @@ def ingest_live(
     }
     if spectrum is not None and spectrum_cols is not None:
         for col, val in zip(spectrum_cols, spectrum):
+            values[col] = val
+    if spectrum_fine is not None and spectrum_fine_cols is not None:
+        for col, val in zip(spectrum_fine_cols, spectrum_fine):
             values[col] = val
     return upsert_sample_1s(conn, ts, device_id, values)
 

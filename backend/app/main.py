@@ -131,6 +131,17 @@ SPECTRUM_HZ: tuple[float, ...] = (
     16000.0,
 )
 SPECTRUM_METRICS: tuple[str, ...] = tuple(f"oct_{b}" for b in SPECTRUM_BANDS)
+
+# Jemné 5 Hz pásma 190–270 Hz (pořadí = ESP spectrum_fine[])
+FINE_SPECTRUM_HZ: tuple[float, ...] = tuple(
+    float(hz) for hz in storage.FINE_SPECTRUM_HZ
+)
+FINE_SPECTRUM_BANDS: tuple[str, ...] = storage.FINE_SPECTRUM_BANDS
+FINE_SPECTRUM_LABELS: tuple[str, ...] = tuple(
+    f"{int(hz)} Hz" for hz in FINE_SPECTRUM_HZ
+)
+FINE_SPECTRUM_METRICS: tuple[str, ...] = storage.FINE_SPECTRUM_COLS
+
 # LFI ≈ 20–200 Hz → 1/3-oktávy 25…200 Hz
 LFI_BAND_INDEXES: tuple[int, ...] = tuple(
     i for i, hz in enumerate(SPECTRUM_HZ) if 20.0 <= hz <= 200.0
@@ -440,6 +451,8 @@ class IngestPayload(BaseModel):
     lamin_1min: Optional[float] = None
     # 17 pásem: 1/3-oktáva 25–250 Hz + oktávy výš
     spectrum: Optional[list[float]] = Field(default=None, max_length=17)
+    # 17 × 5 Hz středy 190–270 Hz
+    spectrum_fine: Optional[list[float]] = Field(default=None, max_length=17)
     ts: Optional[float] = None  # unix seconds; default = server time
 
 
@@ -1011,6 +1024,14 @@ def ingest(payload: IngestPayload, _: None = Depends(require_api_key)) -> dict[s
                 detail=f"spectrum must have {len(SPECTRUM_BANDS)} values",
             )
         spectrum_cols = SPECTRUM_METRICS
+    spectrum_fine_cols: Optional[tuple[str, ...]] = None
+    if payload.spectrum_fine is not None:
+        if len(payload.spectrum_fine) != len(FINE_SPECTRUM_BANDS):
+            raise HTTPException(
+                status_code=400,
+                detail=f"spectrum_fine must have {len(FINE_SPECTRUM_BANDS)} values",
+            )
+        spectrum_fine_cols = FINE_SPECTRUM_METRICS
     ts = payload.ts if payload.ts is not None else utc_now()
     written = 0
     with db() as conn:
@@ -1023,6 +1044,8 @@ def ingest(payload: IngestPayload, _: None = Depends(require_api_key)) -> dict[s
             lfi_db=payload.lfi_db,
             spectrum=payload.spectrum,
             spectrum_cols=spectrum_cols,
+            spectrum_fine=payload.spectrum_fine,
+            spectrum_fine_cols=spectrum_fine_cols,
         )
         written += storage.upsert_minute(
             conn,
@@ -1241,6 +1264,72 @@ def spectrum_history(
         "offline": offline,
         "storage": storage_info,
         "note": note,
+    }
+
+
+@app.get("/api/v1/spectrum/fine/history")
+def spectrum_fine_history(
+    hours: float = Query(default=6, ge=0.1, le=24 * 90),
+    start: float | None = Query(
+        default=None,
+        description="Unix začátek okna; bez něj končí okno na teď (živě).",
+    ),
+    device_id: str = Query(default="hlukomer"),
+    max_columns: int = Query(default=360, ge=10, le=2000),
+) -> dict[str, Any]:
+    """Heatmapa jemného spektra 190–270 Hz (5 Hz IIR pásma)."""
+    now = utc_now()
+    span = hours * 3600
+    if start is None:
+        t_end = now
+        t_start = t_end - span
+    else:
+        t_start = float(start)
+        t_end = t_start + span
+        if t_start >= now:
+            raise HTTPException(status_code=400, detail="start must be in the past")
+        if t_end > now:
+            t_end = now
+        if t_end <= t_start:
+            raise HTTPException(status_code=400, detail="empty time window")
+
+    with db() as conn:
+        complete = storage.fetch_spectrum_columns_raw(
+            conn, device_id, t_start, t_end, FINE_SPECTRUM_METRICS
+        )
+    columns, vmin, vmax = downsample_spectrum_columns(complete, max_columns)
+    with db() as conn:
+        offline = fetch_offline_stats(conn, device_id, t_start, t_end)
+        storage_info = {
+            "hot_retention_hours": storage.HOT_RETENTION_HOURS,
+            "archive_interval_s": storage.ARCHIVE_INTERVAL_S,
+            "resolution": (
+                "1s"
+                if t_start >= storage.hot_cutoff(now)
+                else "mixed"
+                if t_end > storage.hot_cutoff(now)
+                else f"{storage.ARCHIVE_INTERVAL_S}s"
+            ),
+        }
+    night_bands, sun_source = build_night_bands(t_start, t_end)
+    return {
+        "device_id": device_id,
+        "hours": hours,
+        "start": round(t_start, 3),
+        "end": round(t_end, 3),
+        "bands": list(FINE_SPECTRUM_BANDS),
+        "labels": list(FINE_SPECTRUM_LABELS),
+        "hz": list(FINE_SPECTRUM_HZ),
+        "bandwidth_hz": 5.0,
+        "columns": columns,
+        "vmin": round(vmin, 1) if vmin is not None else None,
+        "vmax": round(vmax, 1) if vmax is not None else None,
+        "night_bands": night_bands,
+        "limit_change_edges": build_limit_change_edges(t_start, t_end),
+        "sun": {"source": sun_source},
+        "offline": offline,
+        "storage": storage_info,
+        "note": "Jemné IIR pásma 5 Hz (190–270 Hz). Trvalá čára = tonální složka.",
     }
 
 
