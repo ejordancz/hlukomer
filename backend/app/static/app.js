@@ -67,9 +67,10 @@ const CHART_SPEC_MAX_HOURS = 48;
 
 const CHART_DBA_COLOR = "#7ec8a3";
 const CHART_DBA_FILL = "rgba(126, 200, 163, 0.12)";
-/** Napětí křivky dBA; při ořezu šumu vyšší → plynulejší mosty přes mezery. */
+/** Soft most přes vynechaný šum (segment.borderColor). */
+const CHART_DBA_BRIDGE_COLOR = "rgba(126, 200, 163, 0.42)";
+/** Napětí křivky dBA (monotone při denoise → bez overshootu přes mezery). */
 const CHART_DBA_TENSION = 0.25;
-const CHART_DBA_TENSION_DENOISED = 0.45;
 
 /** Dominantní pásma, pro která se při filtru vyhodnocuje limit (Hz). */
 const LIMIT_EVAL_HZ = new Set([25, 200, 250]);
@@ -603,8 +604,9 @@ function ensurePeakMask() {
 }
 
 /**
- * Naměřená řada bez přechodných peaků: šumové body se vynechají,
- * zbylé body Chart.js propojí plynule (vyšší tension).
+ * Naměřená řada bez přechodných peaků: šumové body se nevynechají,
+ * ale nahradí ambientní lineární interpolací mezi okolními platnými body.
+ * Hluchá místa tak zůstanou v čase a napojí se vodorovně/šikmo bez svislých skoků.
  */
 function buildDenoisedMeasured(points, measuredData) {
   const n = measuredData?.length || 0;
@@ -616,13 +618,59 @@ function buildDenoisedMeasured(points, measuredData) {
     return measuredData.map((p) => ({ x: p.x, y: p.y }));
   }
 
-  const out = [];
+  const isPeak = new Array(n);
   for (let i = 0; i < n; i++) {
-    if (peakTimes.has(points[i].t)) continue;
-    const src = measuredData[i];
-    out.push({ x: src.x, y: src.y });
+    isPeak[i] = peakTimes.has(points[i].t);
   }
-  return out.length ? out : measuredData.map((p) => ({ x: p.x, y: p.y }));
+
+  const leftOk = new Array(n);
+  let last = -1;
+  for (let i = 0; i < n; i++) {
+    leftOk[i] = last;
+    const y = measuredData[i].y;
+    if (!isPeak[i] && y != null && !Number.isNaN(Number(y))) last = i;
+  }
+  const rightOk = new Array(n);
+  let next = -1;
+  for (let i = n - 1; i >= 0; i--) {
+    rightOk[i] = next;
+    const y = measuredData[i].y;
+    if (!isPeak[i] && y != null && !Number.isNaN(Number(y))) next = i;
+  }
+
+  const out = new Array(n);
+  for (let i = 0; i < n; i++) {
+    const src = measuredData[i];
+    if (!isPeak[i]) {
+      out[i] = { x: src.x, y: src.y };
+      continue;
+    }
+    const L = leftOk[i];
+    const R = rightOk[i];
+    let y;
+    if (L >= 0 && R >= 0) {
+      const xL = measuredData[L].x;
+      const xR = measuredData[R].x;
+      const yL = Number(measuredData[L].y);
+      const yR = Number(measuredData[R].y);
+      const span = xR - xL;
+      const t = span > 0 ? (src.x - xL) / span : 0;
+      y = yL + (yR - yL) * Math.min(1, Math.max(0, t));
+    } else if (L >= 0) {
+      y = measuredData[L].y;
+    } else if (R >= 0) {
+      y = measuredData[R].y;
+    } else {
+      y = src.y;
+    }
+    out[i] = { x: src.x, y, bridged: true };
+  }
+  return out;
+}
+
+/** Segment přes ambientní most (bridged) vs. naměřená data. */
+function dbaSegmentIsBridge(ctx) {
+  return !!(ctx?.p0?.raw?.bridged || ctx?.p1?.raw?.bridged);
 }
 
 function chartDatasetByLabel(label) {
@@ -791,7 +839,7 @@ function syncDisplayToggleUi() {
   const limitFreqTip =
     "Ignoruje úseky, kde není dominantní pásmo 25, 200 nebo 250 Hz (typicky VZT), " +
     "a krátké peaky mimo běžný ambientní hluk. " +
-    "V grafu ořízne šumové špičky a zbylé úseky plynule napojí. " +
+    "V grafu nahradí šumové špičky ambientní spojnicí přes hluchá místa. " +
     "Šedé překročení se do statistiky nad limitem nezapočítá.";
   const fineTip =
     "Zobrazí jemné spektrum 190–270 Hz po 5 Hz (IIR). Experimentální — vyšší zátěž ESP a více dat.";
@@ -976,7 +1024,9 @@ function applyHistoryDisplay({ refetchSpec = true } = {}) {
     dbaDs.data = filterOn
       ? buildDenoisedMeasured(rawPoints, measuredData)
       : measuredData;
-    dbaDs.tension = filterOn ? CHART_DBA_TENSION_DENOISED : CHART_DBA_TENSION;
+    dbaDs.tension = CHART_DBA_TENSION;
+    // Monotone bez overshootu — mosty přes hluchá místa neudělají „zuby“.
+    dbaDs.cubicInterpolationMode = filterOn ? "monotone" : "default";
   }
   // Neviditelná řada jen pro čtvereček v tooltipu (stejná barva jako mezigraf).
   // Drží vždy surová naměřená data — i pro sloupcový graf překročení.
@@ -1357,6 +1407,12 @@ function initChart() {
           tension: CHART_DBA_TENSION,
           pointRadius: 0,
           borderWidth: 2,
+          segment: {
+            borderColor: (ctx) =>
+              dbaSegmentIsBridge(ctx) ? CHART_DBA_BRIDGE_COLOR : CHART_DBA_COLOR,
+            borderDash: (ctx) => (dbaSegmentIsBridge(ctx) ? [5, 4] : undefined),
+            borderWidth: (ctx) => (dbaSegmentIsBridge(ctx) ? 1.5 : 2),
+          },
         },
         {
           label: "limit",
