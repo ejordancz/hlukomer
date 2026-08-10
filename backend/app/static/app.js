@@ -2543,7 +2543,12 @@ function drawChartFineSpectrogram() {
     height,
     data,
     emptyText: "High-res FFT…",
-    skipYLabels: true,
+    // 81 × 1 Hz — každých 5 Hz (190, 195, … 270).
+    yLabelFn: (lab, hz) => {
+      const h = Number(hz);
+      if (!Number.isFinite(h) || Math.round(h) % 5 !== 0) return "";
+      return lab || `${Math.round(h)} Hz`;
+    },
   });
 }
 
