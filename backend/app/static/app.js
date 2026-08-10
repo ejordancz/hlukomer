@@ -57,9 +57,9 @@ const CHART_SPEC_HEIGHT = 288;
 /** High-res FFT 190–270 Hz — 81 binů; fisheye lupa doplní detail. */
 const CHART_FINE_SPEC_HEIGHT = 384;
 /** Fisheye lupa na ose Y (násobek výšky řádku u kurzoru). */
-const FINE_LENS_STRENGTH = 8.5;
+const FINE_LENS_STRENGTH = 5;
 /** Poloměr lupty jako podíl výšky stripu (užší = méně řádků). */
-const FINE_LENS_RADIUS = 0.095;
+const FINE_LENS_RADIUS = 0.05;
 /** Výška grafu překročení limitu (~1/4 spektrogramu). */
 const CHART_EXCESS_HEIGHT = Math.round(CHART_SPEC_HEIGHT / 4);
 /** Barva sloupců překročení + čtvereček v tooltipu. */
