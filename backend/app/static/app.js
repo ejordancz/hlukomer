@@ -156,6 +156,13 @@ const state = {
   fineSpecLensRaf: 0,
   /** Váhy řádků (shora dolů) z posledního vykreslení fine heatmapy. */
   fineSpecRowWeights: null,
+  /**
+   * WASD navigace nad spektrogramem:
+   * skrytý OS kurzor + virtuální bod (clientX/Y), anchorMouse* pro detekci pohybu myši.
+   */
+  specKbdNav: null,
+  /** Poslední pozice myši nad spektrogramem (pro start WASD). */
+  specPointerLast: null,
   /** Hlavní graf: true = okno končí „teď“, start se posouvá s časem. */
   chartLive: true,
   /** Pevný začátek okna grafu (unix s), když chartLive=false. */
@@ -1808,12 +1815,174 @@ function showChartHoverPanel(tsSec) {
 }
 
 function hideChartCrosshair() {
+  exitSpecKbdNav({ restoreHover: false });
   state.hoverTs = null;
   const el = $("chartCrosshair");
   if (el) el.hidden = true;
   hideChartHoverPanel();
   hideSpecTooltip();
   clearFineLens();
+}
+
+const SPEC_KBD_STEP_PX = 6;
+const SPEC_KBD_MOUSE_EXIT_PX = 3;
+
+function isTypingTarget(el) {
+  if (!el || el === document.body) return false;
+  const tag = el.tagName;
+  if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return true;
+  if (el.isContentEditable) return true;
+  return false;
+}
+
+/** @returns {{ target: 'main'|'fine', canvas: HTMLCanvasElement, rect: DOMRect } | null} */
+function spectrogramHitAt(clientX, clientY) {
+  const candidates = [
+    { id: "chartFineSpectrogram", stripId: "chartFineSpecStrip", target: "fine" },
+    { id: "chartSpectrogram", stripId: "chartSpecStrip", target: "main" },
+  ];
+  for (const c of candidates) {
+    if (c.target === "fine" && !fineSpectrumVisible()) continue;
+    if (c.target === "main" && !chartSpecEnabled()) continue;
+    const strip = $(c.stripId);
+    const canvas = $(c.id);
+    if (!strip || strip.hidden || !canvas) continue;
+    const rect = canvas.getBoundingClientRect();
+    if (
+      clientX >= rect.left &&
+      clientX <= rect.right &&
+      clientY >= rect.top &&
+      clientY <= rect.bottom
+    ) {
+      return { target: c.target, canvas, rect };
+    }
+  }
+  return null;
+}
+
+function hideSpecPointerEl() {
+  const el = $("chartSpecPointer");
+  if (el) el.hidden = true;
+}
+
+function positionSpecPointer(clientX, clientY) {
+  const el = $("chartSpecPointer");
+  const wrap = document.querySelector(".chart-wrap");
+  if (!el || !wrap) return;
+  const wrapRect = wrap.getBoundingClientRect();
+  el.hidden = false;
+  el.style.left = `${clientX - wrapRect.left}px`;
+  el.style.top = `${clientY - wrapRect.top}px`;
+}
+
+/** Aplikuje virtuální bod spektrogramu (crosshair + fine lens). */
+function applySpecVirtualPointer(clientX, clientY, target) {
+  const canvasId =
+    target === "fine"
+      ? "chartFineSpectrogram"
+      : target === "main"
+        ? "chartSpectrogram"
+        : null;
+  let hit = null;
+  if (canvasId) {
+    const canvas = $(canvasId);
+    if (canvas) hit = { target, canvas, rect: canvas.getBoundingClientRect() };
+  } else {
+    hit = spectrogramHitAt(clientX, clientY);
+  }
+  if (!hit) return false;
+
+  const x = Math.min(hit.rect.right, Math.max(hit.rect.left, clientX));
+  const y = Math.min(hit.rect.bottom, Math.max(hit.rect.top, clientY));
+  positionSpecPointer(x, y);
+
+  const ts = timeFromChartClientX(x);
+  if (ts != null) showChartCrosshair(ts);
+  else hideChartHoverPanel();
+
+  if (hit.target === "fine") {
+    scheduleFineLens((y - hit.rect.top) / Math.max(1, hit.rect.height));
+  } else if (state.fineSpecLensNorm != null) {
+    clearFineLens();
+  }
+  return true;
+}
+
+function exitSpecKbdNav({ restoreHover = true } = {}) {
+  if (!state.specKbdNav?.active) {
+    hideSpecPointerEl();
+    document.body.classList.remove("spec-kbd-nav");
+    return;
+  }
+  state.specKbdNav = null;
+  hideSpecPointerEl();
+  document.body.classList.remove("spec-kbd-nav");
+  if (!restoreHover) return;
+}
+
+function enterSpecKbdNav(clientX, clientY, target, anchorMouseX, anchorMouseY) {
+  state.specKbdNav = {
+    active: true,
+    target,
+    clientX,
+    clientY,
+    anchorMouseX,
+    anchorMouseY,
+  };
+  document.body.classList.add("spec-kbd-nav");
+  applySpecVirtualPointer(clientX, clientY, target);
+}
+
+function moveSpecKbdNav(dx, dy) {
+  const nav = state.specKbdNav;
+  if (!nav?.active) return;
+  const canvas =
+    nav.target === "fine" ? $("chartFineSpectrogram") : $("chartSpectrogram");
+  if (!canvas) {
+    exitSpecKbdNav({ restoreHover: false });
+    return;
+  }
+  const rect = canvas.getBoundingClientRect();
+  nav.clientX = Math.min(rect.right, Math.max(rect.left, nav.clientX + dx));
+  nav.clientY = Math.min(rect.bottom, Math.max(rect.top, nav.clientY + dy));
+  applySpecVirtualPointer(nav.clientX, nav.clientY, nav.target);
+}
+
+function bindSpecKeyboardNav() {
+  document.addEventListener("keydown", (ev) => {
+    if (ev.ctrlKey || ev.metaKey || ev.altKey) return;
+    if (isTypingTarget(ev.target)) return;
+
+    const key = ev.key.length === 1 ? ev.key.toLowerCase() : ev.key;
+    let dx = 0;
+    let dy = 0;
+    if (key === "a" || key === "ArrowLeft") dx = -SPEC_KBD_STEP_PX;
+    else if (key === "d" || key === "ArrowRight") dx = SPEC_KBD_STEP_PX;
+    else if (key === "w" || key === "ArrowUp") dy = -SPEC_KBD_STEP_PX;
+    else if (key === "s" || key === "ArrowDown") dy = SPEC_KBD_STEP_PX;
+    else return;
+
+    if (state.specKbdNav?.active) {
+      ev.preventDefault();
+      moveSpecKbdNav(dx, dy);
+      return;
+    }
+
+    const last = state.specPointerLast;
+    if (!last) return;
+    const hit = spectrogramHitAt(last.clientX, last.clientY);
+    if (!hit) return;
+
+    ev.preventDefault();
+    enterSpecKbdNav(
+      last.clientX,
+      last.clientY,
+      hit.target,
+      last.clientX,
+      last.clientY
+    );
+    moveSpecKbdNav(dx, dy);
+  });
 }
 
 function nearestSpecColumnFrom(data, tsSec, maxDistSec) {
@@ -2607,6 +2776,7 @@ function bindChartPan() {
 
   const onDown = (ev, hitTest) => {
     if (ev.button != null && ev.button !== 0) return;
+    if (state.specKbdNav?.active) exitSpecKbdNav({ restoreHover: false });
     const chart = state.chart;
     if (!chart?.chartArea) return;
     const el = ev.currentTarget;
@@ -2695,6 +2865,23 @@ function bindChartCrosshair() {
 
   stack.addEventListener("mousemove", (ev) => {
     if (state.chartPanning) return;
+
+    if (state.specKbdNav?.active) {
+      const nav = state.specKbdNav;
+      const dx = ev.clientX - nav.anchorMouseX;
+      const dy = ev.clientY - nav.anchorMouseY;
+      if (Math.hypot(dx, dy) <= SPEC_KBD_MOUSE_EXIT_PX) return;
+      exitSpecKbdNav({ restoreHover: false });
+      // pokračovat běžným hoverem podle aktuální myši
+    }
+
+    const specHit = spectrogramHitAt(ev.clientX, ev.clientY);
+    if (specHit) {
+      state.specPointerLast = { clientX: ev.clientX, clientY: ev.clientY, target: specHit.target };
+    } else {
+      state.specPointerLast = null;
+    }
+
     const onSurface = ev.target.closest?.(
       "#chart, #chartExcess, #chartSpectrogram, #chartFineSpectrogram, .chart-excess-strip, .chart-spec-strip, .chart-spec-canvas-wrap, .chart-axis-labels"
     );
@@ -2731,7 +2918,10 @@ function bindChartCrosshair() {
 
     showChartCrosshair(ts);
   });
-  stack.addEventListener("mouseleave", () => hideChartCrosshair());
+  stack.addEventListener("mouseleave", () => {
+    state.specPointerLast = null;
+    hideChartCrosshair();
+  });
 }
 
 function applyCustomRangeFromInputs() {
@@ -2869,6 +3059,7 @@ function bind() {
 
   bindChartPan();
   bindChartCrosshair();
+  bindSpecKeyboardNav();
 }
 
 initChart();

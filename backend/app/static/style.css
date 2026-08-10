@@ -1386,6 +1386,33 @@ main {
   display: none;
 }
 
+/* Virtuální bod při WASD navigaci nad spektrogramem */
+.chart-spec-pointer {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow:
+    0 0 0 1px rgba(0, 0, 0, 0.9),
+    0 0 0 2px rgba(196, 240, 130, 0.95),
+    0 0 10px 2px rgba(196, 240, 130, 0.55);
+  pointer-events: none;
+  z-index: 9;
+  transform: translate(-50%, -50%);
+}
+
+.chart-spec-pointer[hidden] {
+  display: none;
+}
+
+body.spec-kbd-nav,
+body.spec-kbd-nav * {
+  cursor: none !important;
+}
+
 .chart-hover-panel {
   position: fixed;
   top: 0;
