@@ -2211,8 +2211,28 @@ function nearestSpecColumn(tsSec) {
   return nearestSpecColumnFrom(state.chartSpectrogram, tsSec);
 }
 
-/** Jemné spektrum: overlay jen když je u kurzoru reálný vzorek (ne snap přes celý rozsah). */
+/** Jemné spektrum: minimální tolerance (s) při hledání nejbližšího sloupce. */
 const FINE_SPEC_HOVER_MAX_DIST_S = 10;
+
+/**
+ * Max. vzdálenost k nejbližšímu fine-sloupci: alespoň polovina typického rozestupu,
+ * aby readout (Hz · dB) zůstal vidět i při řídkých sloupcích (6 h ≈ 45 s),
+ * ale bez snapu přes prázdné úseky bez dat.
+ */
+function fineSpecHoverMaxDistSec(data) {
+  const cols = data?.columns;
+  if (!cols?.length) return FINE_SPEC_HOVER_MAX_DIST_S;
+  if (cols.length < 2) {
+    const { t0, t1 } = state.chartRange;
+    return Math.max(FINE_SPEC_HOVER_MAX_DIST_S, (t1 - t0) * 0.5);
+  }
+  let sum = 0;
+  for (let i = 1; i < cols.length; i++) {
+    sum += Math.abs(cols[i].t - cols[i - 1].t);
+  }
+  const avgGap = sum / (cols.length - 1);
+  return Math.max(FINE_SPEC_HOVER_MAX_DIST_S, avgGap * 0.5 + 1e-6);
+}
 
 function hideSpecTooltip() {
   state.specTooltipColTs = null;
@@ -2248,7 +2268,7 @@ function updateSpecPointerReadout(tsSec) {
   if (state.fineSpecFocusBand != null && fineSpectrumVisible()) {
     data = state.chartFineSpectrogram;
     focusBand = state.fineSpecFocusBand;
-    maxDistSec = FINE_SPEC_HOVER_MAX_DIST_S;
+    maxDistSec = fineSpecHoverMaxDistSec(data);
     const n = data?.hz?.length || 0;
     if (!data || focusBand < 0 || focusBand >= n) {
       hideFineSpecCursorReadout();
