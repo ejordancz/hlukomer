@@ -1297,34 +1297,16 @@ main {
   background: #0a1010;
 }
 
-/* Musí být AŽ za .chart-spec-* — stejný element má obě třídy. */
+/* Musí být AŽ za .chart-spec-* — stejný element má obě třídy.
+   Kompaktní heatmapa (~3 px / Hz); Y popisky se nevykreslují. */
 .chart-spec-y.chart-fine-spec-y {
-  height: 24rem; /* = CHART_FINE_SPEC_HEIGHT 384px */
-  font-size: 0.55rem;
-}
-
-.chart-spec-y.chart-fine-spec-y.is-fisheye {
-  justify-content: flex-start;
-}
-
-.chart-spec-y.chart-fine-spec-y.is-fisheye span {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  min-height: 0;
-  overflow: hidden;
-}
-
-.chart-spec-y.chart-fine-spec-y.is-fisheye span.is-lens-hot {
-  font-size: 0.82rem;
-  font-weight: 700;
-  color: var(--ink);
-  letter-spacing: 0.01em;
-  line-height: 1.05;
+  height: auto;
+  min-height: 20.25rem; /* 81 × 4 px */
 }
 
 .chart-spec-canvas-wrap.chart-fine-spec-canvas-wrap {
-  height: 24rem;
+  height: auto;
+  min-height: 20.25rem;
 }
 
 .chart-spec-bars {
@@ -1376,34 +1358,6 @@ main {
   color: var(--warn);
 }
 
-/* Fine spektrum + lupa: dB hodnoty jen v ohnisku, zvětšené. */
-.chart-spec-bars.is-fisheye {
-  justify-content: flex-start;
-}
-
-.chart-spec-bars.is-fisheye .chart-spec-bar {
-  min-height: 0;
-  overflow: hidden;
-}
-
-.chart-spec-bars.is-fisheye .chart-spec-bar.is-lens-hot .chart-spec-bar-val {
-  width: 2.8em;
-  font-size: 0.82rem;
-  font-weight: 700;
-}
-
-.chart-spec-bars.is-fisheye .chart-spec-bar.is-lens-hot .chart-spec-bar-fill {
-  height: 3px;
-}
-
-.chart-spec-bars.is-fisheye .chart-spec-bar.is-lens-dim .chart-spec-bar-val {
-  visibility: hidden;
-}
-
-.chart-spec-bars.is-fisheye .chart-spec-bar.is-lens-dim .chart-spec-bar-track {
-  opacity: 0.22;
-}
-
 .chart-spec-bar-track {
   flex: 1 1 auto;
   min-width: 0;
@@ -1451,7 +1405,7 @@ main {
 }
 
 .chart-spec-canvas-wrap.chart-fine-spec-canvas-wrap canvas {
-  height: 24rem;
+  height: 100%;
 }
 
 .chart-spec-canvas-wrap canvas.is-dragging {
@@ -1526,12 +1480,37 @@ main {
   transform: translate(-50%, -50%);
 }
 
+.chart-spec-pointer-readout {
+  position: absolute;
+  left: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  padding: 0.15rem 0.4rem;
+  border-radius: 0.2rem;
+  background: rgba(8, 12, 11, 0.88);
+  border: 1px solid rgba(168, 186, 178, 0.28);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+  white-space: nowrap;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.85);
+  pointer-events: none;
+}
+
+.chart-spec-pointer-readout[hidden] {
+  display: none;
+}
+
 .chart-spec-pointer[hidden] {
   display: none;
 }
 
 body.spec-kbd-nav,
-body.spec-kbd-nav * {
+body.spec-kbd-nav *,
+body.spec-pointer-hover,
+body.spec-pointer-hover * {
   cursor: none !important;
 }
 
@@ -1690,47 +1669,6 @@ body.spec-kbd-nav * {
   font-size: 0.72rem;
   text-transform: uppercase;
   letter-spacing: 0.06em;
-}
-
-.chart-zoom-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.45rem;
-  color: var(--muted);
-  font-size: 0.72rem;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  user-select: none;
-}
-
-.chart-zoom-toggle .pill-switch {
-  width: 2.2rem;
-  height: 1.2rem;
-}
-
-.chart-zoom-toggle .pill-switch-thumb {
-  width: 0.92rem;
-  height: 0.92rem;
-  left: calc(100% - 1.02rem);
-}
-
-.chart-zoom-toggle .pill-switch[aria-checked="false"] .pill-switch-thumb {
-  left: 0.1rem;
-}
-
-.chart-zoom-icon {
-  font-size: 1rem;
-  line-height: 1;
-  opacity: 0.85;
-}
-
-.chart-zoom-toggle.is-on {
-  color: var(--ink);
-}
-
-.chart-zoom-toggle.is-on .chart-zoom-icon {
-  color: var(--accent);
-  opacity: 1;
 }
 
 .chart-spec-info {

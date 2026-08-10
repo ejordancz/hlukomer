@@ -9,7 +9,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,700&family=IBM+Plex+Mono:wght@400;500&family=Sora:wght@400;500;600&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/static/style.css?v=81" />
+  <link rel="stylesheet" href="/static/style.css?v=89" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@mdi/font@7.4.47/css/materialdesignicons.min.css" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.9/dist/chart.umd.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
@@ -217,23 +217,6 @@
             <div class="chart-fine-spec-head">
               <p class="chart-pane-title">Spektrogram 190–270 Hz</p>
               <div class="chart-fine-spec-controls">
-                <div
-                  class="chart-zoom-toggle"
-                  title="Přiblížení frekvencí na stupnici u kurzoru"
-                >
-                  <span class="mdi mdi-magnify chart-zoom-icon" aria-hidden="true"></span>
-                  <span class="chart-zoom-label" id="labelFineSpecZoom">Zoom</span>
-                  <button
-                    type="button"
-                    class="pill-switch"
-                    id="switchFineSpecZoom"
-                    role="switch"
-                    aria-checked="true"
-                    aria-labelledby="labelFineSpecZoom"
-                  >
-                    <span class="pill-switch-thumb" aria-hidden="true"></span>
-                  </button>
-                </div>
                 <div class="chart-spec-info" id="chartSpecKbdInfo">
                   <button
                     type="button"
@@ -255,10 +238,9 @@
               <div class="chart-spec-plot">
                 <div class="chart-spec-unit chart-fine-spec-unit" aria-hidden="true">dB</div>
                 <div class="chart-spec-canvas-wrap chart-fine-spec-canvas-wrap" id="chartFineSpecCanvasWrap">
-                  <div class="chart-spec-bars" id="chartFineSpecBars" hidden aria-hidden="true"></div>
                   <canvas
                     id="chartFineSpectrogram"
-                    height="384"
+                    height="324"
                     role="img"
                     aria-label="Spektrogram 190 až 270 Hz"
                   ></canvas>
@@ -281,7 +263,9 @@
         </div>
         <div class="chart-crosshair" id="chartCrosshair" hidden></div>
         <div class="chart-crosshair-h" id="chartCrosshairH" hidden></div>
-        <div class="chart-spec-pointer" id="chartSpecPointer" hidden aria-hidden="true"></div>
+        <div class="chart-spec-pointer" id="chartSpecPointer" hidden aria-hidden="true">
+          <span class="chart-spec-pointer-readout" id="chartSpecPointerReadout" hidden></span>
+        </div>
       </section>
     </section>
   </main>
@@ -435,6 +419,6 @@
     </span>
   </button>
 
-  <script src="/static/app.js?v=76"></script>
+  <script src="/static/app.js?v=86"></script>
 </body>
 </html>
