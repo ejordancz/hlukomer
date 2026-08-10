@@ -132,16 +132,12 @@ SPECTRUM_HZ: tuple[float, ...] = (
 )
 SPECTRUM_METRICS: tuple[str, ...] = tuple(f"oct_{b}" for b in SPECTRUM_BANDS)
 
-# Jemné 5 Hz pásma 190–270 Hz (pořadí = ESP spectrum_fine[])
-FINE_SPECTRUM_HZ: tuple[float, ...] = tuple(
-    float(hz) for hz in storage.FINE_SPECTRUM_HZ
-)
-FINE_SPECTRUM_BANDS: tuple[str, ...] = storage.FINE_SPECTRUM_BANDS
+# High-res FFT 190–270 Hz (1 Hz bins → spectrum_fine_3s)
+FINE_SPECTRUM_HZ: tuple[float, ...] = tuple(float(hz) for hz in storage.FINE_FFT_HZ)
+FINE_SPECTRUM_BANDS: tuple[str, ...] = storage.FINE_FFT_BANDS
 FINE_SPECTRUM_LABELS: tuple[str, ...] = tuple(
     f"{int(hz)} Hz" for hz in FINE_SPECTRUM_HZ
 )
-FINE_SPECTRUM_METRICS: tuple[str, ...] = storage.FINE_SPECTRUM_COLS
-
 # LFI ≈ 20–200 Hz → 1/3-oktávy 25…200 Hz
 LFI_BAND_INDEXES: tuple[int, ...] = tuple(
     i for i, hz in enumerate(SPECTRUM_HZ) if 20.0 <= hz <= 200.0
@@ -442,7 +438,7 @@ def fetch_offline_stats(
 
 class IngestPayload(BaseModel):
     device_id: str = Field(default="hlukomer", max_length=64)
-    kind: str = Field(default="live", pattern="^(live|minute)$")
+    kind: str = Field(default="live", pattern="^(live|minute|spectrum_fine)$")
     laeq_1s: Optional[float] = None
     lez_1s: Optional[float] = None  # LZeq bez A-vážení
     lfi_db: Optional[float] = None  # přímý LFI 20–200 Hz z ESP
@@ -451,10 +447,10 @@ class IngestPayload(BaseModel):
     lamin_1min: Optional[float] = None
     # 17 pásem: 1/3-oktáva 25–250 Hz + oktávy výš
     spectrum: Optional[list[float]] = Field(default=None, max_length=17)
-    # 17 × 5 Hz středy 190–270 Hz
-    spectrum_fine: Optional[list[float]] = Field(default=None, max_length=17)
+    # High-res FFT 190–270 Hz (81 × 1 Hz); kind=spectrum_fine
+    spectrum_fine: Optional[list[float]] = Field(default=None, max_length=81)
+    spectrum_fine_meta: Optional[dict[str, Any]] = None
     ts: Optional[float] = None  # unix seconds; default = server time
-
 
 def utc_now() -> float:
     return time.time()
@@ -1016,6 +1012,22 @@ def latest_metric_value(
 
 @app.post("/api/v1/ingest")
 def ingest(payload: IngestPayload, _: None = Depends(require_api_key)) -> dict[str, Any]:
+    ts = payload.ts if payload.ts is not None else utc_now()
+
+    if payload.kind == "spectrum_fine":
+        if payload.spectrum_fine is None:
+            raise HTTPException(status_code=400, detail="spectrum_fine required")
+        if len(payload.spectrum_fine) != storage.FINE_FFT_N_BINS:
+            raise HTTPException(
+                status_code=400,
+                detail=f"spectrum_fine must have {storage.FINE_FFT_N_BINS} values",
+            )
+        with db() as conn:
+            written = storage.upsert_spectrum_fine_3s(
+                conn, ts, payload.device_id, payload.spectrum_fine
+            )
+        return {"ok": True, "written": written, "ts": ts, "kind": "spectrum_fine"}
+
     spectrum_cols: Optional[tuple[str, ...]] = None
     if payload.spectrum is not None:
         if len(payload.spectrum) != len(SPECTRUM_BANDS):
@@ -1024,15 +1036,12 @@ def ingest(payload: IngestPayload, _: None = Depends(require_api_key)) -> dict[s
                 detail=f"spectrum must have {len(SPECTRUM_BANDS)} values",
             )
         spectrum_cols = SPECTRUM_METRICS
-    spectrum_fine_cols: Optional[tuple[str, ...]] = None
     if payload.spectrum_fine is not None:
-        if len(payload.spectrum_fine) != len(FINE_SPECTRUM_BANDS):
-            raise HTTPException(
-                status_code=400,
-                detail=f"spectrum_fine must have {len(FINE_SPECTRUM_BANDS)} values",
-            )
-        spectrum_fine_cols = FINE_SPECTRUM_METRICS
-    ts = payload.ts if payload.ts is not None else utc_now()
+        # Starý IIR firmware (17 hodnot) — ignorovat, ať nerozbije LAeq ingest.
+        logger.info(
+            "Ignoring legacy spectrum_fine on live ingest (len=%s)",
+            len(payload.spectrum_fine),
+        )
     written = 0
     with db() as conn:
         written += storage.ingest_live(
@@ -1044,8 +1053,6 @@ def ingest(payload: IngestPayload, _: None = Depends(require_api_key)) -> dict[s
             lfi_db=payload.lfi_db,
             spectrum=payload.spectrum,
             spectrum_cols=spectrum_cols,
-            spectrum_fine=payload.spectrum_fine,
-            spectrum_fine_cols=spectrum_fine_cols,
         )
         written += storage.upsert_minute(
             conn,
@@ -1060,7 +1067,6 @@ def ingest(payload: IngestPayload, _: None = Depends(require_api_key)) -> dict[s
     if written == 0:
         raise HTTPException(status_code=400, detail="No metric values provided")
     return {"ok": True, "written": written, "ts": ts}
-
 
 def fetch_spectrum(conn: sqlite3.Connection, device_id: str) -> Optional[dict[str, Any]]:
     row = storage.latest_row_1s(conn, device_id)
@@ -1277,7 +1283,7 @@ def spectrum_fine_history(
     device_id: str = Query(default="hlukomer"),
     max_columns: int = Query(default=360, ge=10, le=2000),
 ) -> dict[str, Any]:
-    """Heatmapa jemného spektra 190–270 Hz (5 Hz IIR pásma)."""
+    """Heatmapa high-res FFT 190–270 Hz (1 Hz bins, 3 s energy average)."""
     now = utc_now()
     span = hours * 3600
     if start is None:
@@ -1294,8 +1300,8 @@ def spectrum_fine_history(
             raise HTTPException(status_code=400, detail="empty time window")
 
     with db() as conn:
-        complete = storage.fetch_spectrum_columns_raw(
-            conn, device_id, t_start, t_end, FINE_SPECTRUM_METRICS
+        complete = storage.fetch_spectrum_fine_columns_raw(
+            conn, device_id, t_start, t_end
         )
     columns, vmin, vmax = downsample_spectrum_columns(complete, max_columns)
     with db() as conn:
@@ -1303,13 +1309,8 @@ def spectrum_fine_history(
         storage_info = {
             "hot_retention_hours": storage.HOT_RETENTION_HOURS,
             "archive_interval_s": storage.ARCHIVE_INTERVAL_S,
-            "resolution": (
-                "1s"
-                if t_start >= storage.hot_cutoff(now)
-                else "mixed"
-                if t_end > storage.hot_cutoff(now)
-                else f"{storage.ARCHIVE_INTERVAL_S}s"
-            ),
+            "fine_integrate_s": storage.FINE_FFT_INTEGRATE_S,
+            "resolution": f"{storage.FINE_FFT_INTEGRATE_S}s",
         }
     night_bands, sun_source = build_night_bands(t_start, t_end)
     return {
@@ -1320,7 +1321,10 @@ def spectrum_fine_history(
         "bands": list(FINE_SPECTRUM_BANDS),
         "labels": list(FINE_SPECTRUM_LABELS),
         "hz": list(FINE_SPECTRUM_HZ),
-        "bandwidth_hz": 5.0,
+        "bandwidth_hz": storage.FINE_FFT_DF_HZ,
+        "df_hz": storage.FINE_FFT_DF_HZ,
+        "integrate_s": storage.FINE_FFT_INTEGRATE_S,
+        "kind": "fft",
         "columns": columns,
         "vmin": round(vmin, 1) if vmin is not None else None,
         "vmax": round(vmax, 1) if vmax is not None else None,
@@ -1329,9 +1333,11 @@ def spectrum_fine_history(
         "sun": {"source": sun_source},
         "offline": offline,
         "storage": storage_info,
-        "note": "Jemné IIR pásma 5 Hz (190–270 Hz). Trvalá čára = tonální složka.",
+        "note": (
+            "High-res FFT 190–270 Hz (Δf=1 Hz). "
+            "Sloupec ≈ 3 s energy average. Trvalá čára = tonální složka."
+        ),
     }
-
 
 @app.get("/api/v1/spectrum/at")
 def spectrum_at(

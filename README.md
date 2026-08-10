@@ -14,6 +14,7 @@ ICS-43434 ──I2S──► ESP32-S3 (ESPHome sound_level_meter)
 
 Měří **LAeq / LAmax / LAmin** (A-vážení), **LZeq** (bez A-vážení), **LFI 20–200 Hz** a spektrum: **1/3-oktáva 25–250 Hz** + oktávy 500 Hz–16 kHz přes [esphome-sound-level-meter](https://github.com/stas-sl/esphome-sound-level-meter).
 
+Volitelně (Beta) **High-res FFT 190–270 Hz** (Goertzel DFT bins po 1 Hz, záznam každých 3 s) — druhý spektrogram v dashboardu.
 Z těchto dat dashboard počítá:
 
 | Metrika | Význam |
@@ -23,10 +24,11 @@ Z těchto dat dashboard počítá:
 | **Dominantní frekvence** | střed nejsilnějšího pásma (rozlišení 1/3 oktávy v basu) |
 | **HVAC Score (0–100)** | basová dominance + tonalita typická pro VZT |
 | **Spectrogram** | heatmapa spektra v čase (tenká čára = stálý tón, např. 50/63 Hz) |
+| **High-res FFT 190–270 Hz (Beta)** | skutečné 1 Hz biny (DFT), sloupec ≈ 3 s; oddělená tabulka `spectrum_fine_3s` |
 | **Spektrum okamžiku** | klik na sloupec spectrogramu → pásma daného času |
 
-> ESP posílá **IIR pásmové filtry**, ne true FFT. 1/3-oktáva v basu stačí k odlišení 50 Hz (síť) vs 63 Hz (ventilátor).
-
+> Hlavní spektrogram: ESP posílá **IIR pásmové filtry**, ne true FFT. 1/3-oktáva v basu stačí k odlišení 50 Hz (síť) vs 63 Hz (ventilátor).
+> BETA graf: **DFT/FFT biny** 190–270 Hz (komponenta `hlukomer_fine_fft`).
 Po změně spektra je potřeba **znovu flashnout** ESP (`esphome run esphome/hlukomer.yaml`).
 
 ## 1. Docker služba
@@ -49,6 +51,7 @@ API:
 | `GET /api/v1/latest` | poslední hodnoty + spektrum + LFI / HVAC / dominantní frekvence |
 | `GET /api/v1/history?metric=laeq_1min&hours=24` | body grafu |
 | `GET /api/v1/spectrum/history?hours=6` | sloupce pro spectrogram |
+| `GET /api/v1/spectrum/fine/history?hours=6` | high-res FFT 190–270 Hz (1 Hz / 3 s) |
 | `GET /api/v1/spectrum/at?ts=…` | spektrum (pseudo-FFT) v daném okamžiku |
 | `GET /api/v1/stats?hours=24` | agregace |
 

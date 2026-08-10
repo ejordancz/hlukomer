@@ -54,8 +54,8 @@ const LF_BANDS = new Set([
 ]);
 
 const CHART_SPEC_HEIGHT = 288;
-/** Jemné spektrum 190–270 Hz — stejná výška/řádkování jako hlavní spektrogram. */
-const CHART_FINE_SPEC_HEIGHT = CHART_SPEC_HEIGHT;
+/** High-res FFT 190–270 Hz — vyšší strip kvůli 81 binům. */
+const CHART_FINE_SPEC_HEIGHT = 360;
 /** Výška grafu překročení limitu (~1/4 spektrogramu). */
 const CHART_EXCESS_HEIGHT = Math.round(CHART_SPEC_HEIGHT / 4);
 /** Barva sloupců překročení + čtvereček v tooltipu. */
@@ -842,7 +842,7 @@ function syncDisplayToggleUi() {
     "V grafu nahradí šumové špičky ambientní spojnicí přes hluchá místa. " +
     "Šedé překročení se do statistiky nad limitem nezapočítá.";
   const fineTip =
-    "Zobrazí jemné spektrum 190–270 Hz po 5 Hz (IIR). Experimentální — vyšší zátěž ESP a více dat.";
+    "Zobrazí spektrogram 190–270 Hz po 1 Hz (skutečná FFT / DFT). Sloupec ≈ 3 s. Experimentální — vyšší zátěž ESP.";
   const tipW = $("tipWindowCorr");
   const tipT = $("tipTonalCorr");
   const tipF = $("tipLimitFreq");
@@ -1999,8 +1999,10 @@ function renderChartAxisLabels() {
   el.innerHTML = parts.join("");
 }
 
-function fineSpecYLabel(lab, _hz) {
-  // Stejný formát jako hlavní spektrogram („190 Hz“, …).
+function fineSpecYLabel(lab, hz) {
+  const h = Number(hz);
+  if (Number.isFinite(h) && h % 10 === 0) return `${Math.round(h)} Hz`;
+  if (Number.isFinite(h)) return "";
   return lab || "";
 }
 
@@ -2126,7 +2128,7 @@ function drawChartFineSpectrogram() {
     yElId: "chartFineSpecYLabels",
     height: CHART_FINE_SPEC_HEIGHT,
     data: state.chartFineSpectrogram,
-    emptyText: "Jemné spektrum…",
+    emptyText: "High-res FFT…",
     yLabelFn: fineSpecYLabel,
   });
 }

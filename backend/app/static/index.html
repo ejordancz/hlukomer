@@ -9,7 +9,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,700&family=IBM+Plex+Mono:wght@400;500&family=Sora:wght@400;500;600&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/static/style.css?v=66" />
+  <link rel="stylesheet" href="/static/style.css?v=67" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@mdi/font@7.4.47/css/materialdesignicons.min.css" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.9/dist/chart.umd.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
@@ -191,9 +191,9 @@
                 <div class="chart-spec-bars" id="chartFineSpecBars" hidden aria-hidden="true"></div>
                 <canvas
                   id="chartFineSpectrogram"
-                  height="288"
+                  height="360"
                   role="img"
-                  aria-label="Jemné spektrum 190 až 270 Hz"
+                  aria-label="High-res FFT 190 až 270 Hz"
                 ></canvas>
               </div>
             </div>
@@ -337,14 +337,14 @@
           </button>
         </div>
         <span class="display-toggle-label" id="labelFineSpectrum">
-          Spectrum 190–270Hz
+          High-res FFT 190–270 Hz
           <span class="display-toggle-beta">Beta</span>
         </span>
         <div class="display-toggle-tip" id="tipFineSpectrum" role="tooltip">
-          Zobrazí jemné spektrum 190–270 Hz po 5 Hz (IIR). Experimentální — vyšší zátěž ESP a více dat.
+          Zobrazí spektrogram 190–270 Hz po 1 Hz (skutečná FFT / DFT). Sloupec ≈ 3 s. Experimentální — vyšší zátěž ESP.
         </div>
         <span class="visually-hidden" id="descFineSpectrum">
-          Zobrazí jemné spektrum 190–270 Hz po 5 Hz (IIR). Experimentální — vyšší zátěž ESP a více dat.
+          Zobrazí spektrogram 190–270 Hz po 1 Hz (skutečná FFT / DFT). Sloupec ≈ 3 s. Experimentální — vyšší zátěž ESP.
         </span>
       </div>
     </div>
@@ -365,6 +365,6 @@
     </span>
   </button>
 
-  <script src="/static/app.js?v=61"></script>
+  <script src="/static/app.js?v=62"></script>
 </body>
 </html>

@@ -2,6 +2,7 @@
 # Flash: esphome run esphome/hlukomer.yaml
 # Secrets: esphome/secrets.yaml (viz secrets.yaml.example)
 # Spektrum: 1/3-oktáva 25–250 Hz + oktávy 500 Hz–16 kHz; LZeq; LFI 20–200 Hz
+# High-res FFT 190–270 Hz (Beta): Goertzel DFT 1 Hz → POST kind=spectrum_fine / 3 s
 
 substitutions:
   device_name: hlukomer
@@ -21,10 +22,14 @@ esp32:
   framework:
     type: esp-idf
 
-# A-vážení, LAeq/LZeq, LFI, 1/3-oktáva + oktávové spektrum
+# A-vážení, LAeq/LZeq, LFI, 1/3-oktáva + oktávové spektrum; high-res FFT 190–270
 external_components:
   - source: github://stas-sl/esphome-sound-level-meter@dev
     components: [sound_level_meter]
+  - source:
+      type: local
+      path: components
+    components: [hlukomer_fine_fft]
 
 wifi:
   ssid: !secret wifi_ssid
@@ -72,6 +77,16 @@ microphone:
     bits_per_sample: 32bit
     channel: left
     i2s_mode: primary
+
+# High-res FFT 190–270 Hz (Goertzel ≡ FFT bins @ 1 Hz), POST každých 3 s
+hlukomer_fine_fft:
+  microphone: mic
+  api_url: ${api_base_url}/api/v1/ingest
+  api_key: !secret ingest_api_key
+  device_id: ${device_name}
+  # Doladit podle referenčního tónu / LZeq (dB SPL offset)
+  spl_offset: 94.0
+  bits_per_sample: 32
 
 # ICS-43434 datasheet: −26 dBFS @ 94 dB SPL
 sound_level_meter:
@@ -275,161 +290,6 @@ sound_level_meter:
         - [1.0, 2.0, 1.0, 1.7490839958190918, 0.7821956872940063]
         - [1.0, 2.0, 1.0, 1.8919676542282104, 0.9234353303909302]
 
-    # === FINE 5Hz 190-270 BEGIN ===
-    # jemné 5 Hz fc=190.0 (187.5–192.5 Hz)
-    - id: f_fine_190
-      type: sos
-      coeffs:
-        # fine fc=190.0 bw=5.0 order=4 @ 48 kHz
-        - [1.1458908197043826e-14, 2.2917816394087652e-14, 1.1458908197043826e-14, -1.9987679719924927, 0.9993924498558044]
-        - [1.0, 2.0, 1.0, -1.998786449432373, 0.9993985295295715]
-        - [1.0, -2.0, 1.0, -1.9991129636764526, 0.9997465014457703]
-        - [1.0, -2.0, 1.0, -1.9991490840911865, 0.9997525811195374]
-    # jemné 5 Hz fc=195.0 (192.5–197.5 Hz)
-    - id: f_fine_195
-      type: sos
-      coeffs:
-        # fine fc=195.0 bw=5.0 order=4 @ 48 kHz
-        - [1.1458908197043826e-14, 2.2917816394087652e-14, 1.1458908197043826e-14, -1.998734951019287, 0.999392569065094]
-        - [1.0, 2.0, 1.0, -1.9987536668777466, 0.9993984699249268]
-        - [1.0, -2.0, 1.0, -1.999079704284668, 0.9997466206550598]
-        - [1.0, -2.0, 1.0, -1.9991164207458496, 0.9997525215148926]
-    # jemné 5 Hz fc=200.0 (197.5–202.5 Hz)
-    - id: f_fine_200
-      type: sos
-      coeffs:
-        # fine fc=200.0 bw=5.0 order=4 @ 48 kHz
-        - [1.1458908197043826e-14, 2.2917816394087652e-14, 1.1458908197043826e-14, -1.9987009763717651, 0.9993926286697388]
-        - [1.0, 2.0, 1.0, -1.9987199306488037, 0.999398410320282]
-        - [1.0, -2.0, 1.0, -1.999045491218567, 0.9997466802597046]
-        - [1.0, -2.0, 1.0, -1.9990829229354858, 0.9997524619102478]
-    # jemné 5 Hz fc=205.0 (202.5–207.5 Hz)
-    - id: f_fine_205
-      type: sos
-      coeffs:
-        # fine fc=205.0 bw=5.0 order=4 @ 48 kHz
-        - [1.1458908197043826e-14, 2.2917816394087652e-14, 1.1458908197043826e-14, -1.9986661672592163, 0.9993926882743835]
-        - [1.0, 2.0, 1.0, -1.9986852407455444, 0.9993983507156372]
-        - [1.0, -2.0, 1.0, -1.999010443687439, 0.9997467398643494]
-        - [1.0, -2.0, 1.0, -1.9990485906600952, 0.999752402305603]
-    # jemné 5 Hz fc=210.0 (207.5–212.5 Hz)
-    - id: f_fine_210
-      type: sos
-      coeffs:
-        # fine fc=210.0 bw=5.0 order=4 @ 48 kHz
-        - [1.1458908197043826e-14, 2.2917816394087652e-14, 1.1458908197043826e-14, -1.9986305236816406, 0.9993927478790283]
-        - [1.0, 2.0, 1.0, -1.9986498355865479, 0.9993982315063477]
-        - [1.0, -2.0, 1.0, -1.9989745616912842, 0.9997467994689941]
-        - [1.0, -2.0, 1.0, -1.9990133047103882, 0.9997523427009583]
-    # jemné 5 Hz fc=215.0 (212.5–217.5 Hz)
-    - id: f_fine_215
-      type: sos
-      coeffs:
-        # fine fc=215.0 bw=5.0 order=4 @ 48 kHz
-        - [1.1458908197043826e-14, 2.2917816394087652e-14, 1.1458908197043826e-14, -1.998594045639038, 0.9993928074836731]
-        - [1.0, 2.0, 1.0, -1.9986135959625244, 0.9993981719017029]
-        - [1.0, -2.0, 1.0, -1.9989378452301025, 0.9997468590736389]
-        - [1.0, -2.0, 1.0, -1.9989773035049438, 0.9997522830963135]
-    # jemné 5 Hz fc=220.0 (217.5–222.5 Hz)
-    - id: f_fine_220
-      type: sos
-      coeffs:
-        # fine fc=220.0 bw=5.0 order=4 @ 48 kHz
-        - [1.1458908197043826e-14, 2.2917816394087652e-14, 1.1458908197043826e-14, -1.9985567331314087, 0.9993928670883179]
-        - [1.0, 2.0, 1.0, -1.9985764026641846, 0.9993981122970581]
-        - [1.0, -2.0, 1.0, -1.998900294303894, 0.9997469186782837]
-        - [1.0, -2.0, 1.0, -1.998940348625183, 0.9997522234916687]
-    # jemné 5 Hz fc=225.0 (222.5–227.5 Hz)
-    - id: f_fine_225
-      type: sos
-      coeffs:
-        # fine fc=225.0 bw=5.0 order=4 @ 48 kHz
-        - [1.1458908197043826e-14, 2.2917816394087652e-14, 1.1458908197043826e-14, -1.998518466949463, 0.9993929266929626]
-        - [1.0, 2.0, 1.0, -1.9985383749008179, 0.9993980526924133]
-        - [1.0, -2.0, 1.0, -1.9988617897033691, 0.9997469782829285]
-        - [1.0, -2.0, 1.0, -1.9989025592803955, 0.9997521638870239]
-    # jemné 5 Hz fc=230.0 (227.5–232.5 Hz)
-    - id: f_fine_230
-      type: sos
-      coeffs:
-        # fine fc=230.0 bw=5.0 order=4 @ 48 kHz
-        - [1.1458908197043826e-14, 2.2917816394087652e-14, 1.1458908197043826e-14, -1.9984794855117798, 0.9993929862976074]
-        - [1.0, 2.0, 1.0, -1.9984995126724243, 0.9993979930877686]
-        - [1.0, -2.0, 1.0, -1.998822569847107, 0.9997470378875732]
-        - [1.0, -2.0, 1.0, -1.998863935470581, 0.9997521042823792]
-    # jemné 5 Hz fc=235.0 (232.5–237.5 Hz)
-    - id: f_fine_235
-      type: sos
-      coeffs:
-        # fine fc=235.0 bw=5.0 order=4 @ 48 kHz
-        - [1.1458908197043826e-14, 2.2917816394087652e-14, 1.1458908197043826e-14, -1.9984395503997803, 0.9993930459022522]
-        - [1.0, 2.0, 1.0, -1.998459815979004, 0.9993979930877686]
-        - [1.0, -2.0, 1.0, -1.9987823963165283, 0.999747097492218]
-        - [1.0, -2.0, 1.0, -1.9988244771957397, 0.9997520446777344]
-    # jemné 5 Hz fc=240.0 (237.5–242.5 Hz)
-    - id: f_fine_240
-      type: sos
-      coeffs:
-        # fine fc=240.0 bw=5.0 order=4 @ 48 kHz
-        - [1.1458908197043826e-14, 2.2917816394087652e-14, 1.1458908197043826e-14, -1.998398780822754, 0.999393105506897]
-        - [1.0, 2.0, 1.0, -1.9984192848205566, 0.9993979334831238]
-        - [1.0, -2.0, 1.0, -1.9987413883209229, 0.9997471570968628]
-        - [1.0, -2.0, 1.0, -1.9987841844558716, 0.9997519850730896]
-    # jemné 5 Hz fc=245.0 (242.5–247.5 Hz)
-    - id: f_fine_245
-      type: sos
-      coeffs:
-        # fine fc=245.0 bw=5.0 order=4 @ 48 kHz
-        - [1.1458908197043826e-14, 2.2917816394087652e-14, 1.1458908197043826e-14, -1.9983570575714111, 0.9993931651115417]
-        - [1.0, 2.0, 1.0, -1.998377799987793, 0.999397873878479]
-        - [1.0, -2.0, 1.0, -1.998699426651001, 0.9997472167015076]
-        - [1.0, -2.0, 1.0, -1.998742938041687, 0.9997519254684448]
-    # jemné 5 Hz fc=250.0 (247.5–252.5 Hz)
-    - id: f_fine_250
-      type: sos
-      coeffs:
-        # fine fc=250.0 bw=5.0 order=4 @ 48 kHz
-        - [1.1458908197043826e-14, 2.2917816394087652e-14, 1.1458908197043826e-14, -1.998314619064331, 0.9993931651115417]
-        - [1.0, 2.0, 1.0, -1.998335599899292, 0.9993978142738342]
-        - [1.0, -2.0, 1.0, -1.9986567497253418, 0.9997472763061523]
-        - [1.0, -2.0, 1.0, -1.9987008571624756, 0.9997518658638]
-    # jemné 5 Hz fc=255.0 (252.5–257.5 Hz)
-    - id: f_fine_255
-      type: sos
-      coeffs:
-        # fine fc=255.0 bw=5.0 order=4 @ 48 kHz
-        - [1.1458908197043826e-14, 2.2917816394087652e-14, 1.1458908197043826e-14, -1.9982712268829346, 0.9993932247161865]
-        - [1.0, 2.0, 1.0, -1.9982924461364746, 0.9993977546691895]
-        - [1.0, -2.0, 1.0, -1.9986131191253662, 0.9997472763061523]
-        - [1.0, -2.0, 1.0, -1.9986579418182373, 0.9997518062591553]
-    # jemné 5 Hz fc=260.0 (257.5–262.5 Hz)
-    - id: f_fine_260
-      type: sos
-      coeffs:
-        # fine fc=260.0 bw=5.0 order=4 @ 48 kHz
-        - [1.1458908197043826e-14, 2.2917816394087652e-14, 1.1458908197043826e-14, -1.9982270002365112, 0.9993932843208313]
-        - [1.0, 2.0, 1.0, -1.9982484579086304, 0.9993977546691895]
-        - [1.0, -2.0, 1.0, -1.9985686540603638, 0.9997473359107971]
-        - [1.0, -2.0, 1.0, -1.9986141920089722, 0.9997518062591553]
-    # jemné 5 Hz fc=265.0 (262.5–267.5 Hz)
-    - id: f_fine_265
-      type: sos
-      coeffs:
-        # fine fc=265.0 bw=5.0 order=4 @ 48 kHz
-        - [1.1458908197043826e-14, 2.2917816394087652e-14, 1.1458908197043826e-14, -1.998181939125061, 0.9993933439254761]
-        - [1.0, 2.0, 1.0, -1.9982036352157593, 0.9993976950645447]
-        - [1.0, -2.0, 1.0, -1.9985233545303345, 0.9997473955154419]
-        - [1.0, -2.0, 1.0, -1.9985696077346802, 0.9997517466545105]
-    # jemné 5 Hz fc=270.0 (267.5–272.5 Hz)
-    - id: f_fine_270
-      type: sos
-      coeffs:
-        # fine fc=270.0 bw=5.0 order=4 @ 48 kHz
-        - [1.1458908197043826e-14, 2.2917816394087652e-14, 1.1458908197043826e-14, -1.9981359243392944, 0.9993933439254761]
-        - [1.0, 2.0, 1.0, -1.9981579780578613, 0.9993976354598999]
-        - [1.0, -2.0, 1.0, -1.9984771013259888, 0.9997473955154419]
-        - [1.0, -2.0, 1.0, -1.9985241889953613, 0.9997516870498657]
-    # === FINE 5Hz 190-270 END ===
   sensors:
     - type: eq
       name: LAeq 1s
@@ -468,24 +328,6 @@ sound_level_meter:
                 root["spectrum"][14] = id(oct_4k).state;
                 root["spectrum"][15] = id(oct_8k).state;
                 root["spectrum"][16] = id(oct_16k).state;
-                // fine 5 Hz bands 190–270
-                root["spectrum_fine"][0] = id(fine_190).state;
-                root["spectrum_fine"][1] = id(fine_195).state;
-                root["spectrum_fine"][2] = id(fine_200).state;
-                root["spectrum_fine"][3] = id(fine_205).state;
-                root["spectrum_fine"][4] = id(fine_210).state;
-                root["spectrum_fine"][5] = id(fine_215).state;
-                root["spectrum_fine"][6] = id(fine_220).state;
-                root["spectrum_fine"][7] = id(fine_225).state;
-                root["spectrum_fine"][8] = id(fine_230).state;
-                root["spectrum_fine"][9] = id(fine_235).state;
-                root["spectrum_fine"][10] = id(fine_240).state;
-                root["spectrum_fine"][11] = id(fine_245).state;
-                root["spectrum_fine"][12] = id(fine_250).state;
-                root["spectrum_fine"][13] = id(fine_255).state;
-                root["spectrum_fine"][14] = id(fine_260).state;
-                root["spectrum_fine"][15] = id(fine_265).state;
-                root["spectrum_fine"][16] = id(fine_270).state;
 
     - type: eq
       name: LZeq 1s
@@ -663,127 +505,6 @@ sound_level_meter:
       accuracy_decimals: 1
       update_interval: 1s
       dsp_filters: [f_ics43434, f_band_16k]
-    # === FINE 5Hz 190-270 BEGIN ===
-    - type: eq
-      name: Fine 190 Hz
-      id: fine_190
-      unit_of_measurement: dB
-      accuracy_decimals: 1
-      update_interval: 1s
-      dsp_filters: [f_ics43434, f_fine_190]
-    - type: eq
-      name: Fine 195 Hz
-      id: fine_195
-      unit_of_measurement: dB
-      accuracy_decimals: 1
-      update_interval: 1s
-      dsp_filters: [f_ics43434, f_fine_195]
-    - type: eq
-      name: Fine 200 Hz
-      id: fine_200
-      unit_of_measurement: dB
-      accuracy_decimals: 1
-      update_interval: 1s
-      dsp_filters: [f_ics43434, f_fine_200]
-    - type: eq
-      name: Fine 205 Hz
-      id: fine_205
-      unit_of_measurement: dB
-      accuracy_decimals: 1
-      update_interval: 1s
-      dsp_filters: [f_ics43434, f_fine_205]
-    - type: eq
-      name: Fine 210 Hz
-      id: fine_210
-      unit_of_measurement: dB
-      accuracy_decimals: 1
-      update_interval: 1s
-      dsp_filters: [f_ics43434, f_fine_210]
-    - type: eq
-      name: Fine 215 Hz
-      id: fine_215
-      unit_of_measurement: dB
-      accuracy_decimals: 1
-      update_interval: 1s
-      dsp_filters: [f_ics43434, f_fine_215]
-    - type: eq
-      name: Fine 220 Hz
-      id: fine_220
-      unit_of_measurement: dB
-      accuracy_decimals: 1
-      update_interval: 1s
-      dsp_filters: [f_ics43434, f_fine_220]
-    - type: eq
-      name: Fine 225 Hz
-      id: fine_225
-      unit_of_measurement: dB
-      accuracy_decimals: 1
-      update_interval: 1s
-      dsp_filters: [f_ics43434, f_fine_225]
-    - type: eq
-      name: Fine 230 Hz
-      id: fine_230
-      unit_of_measurement: dB
-      accuracy_decimals: 1
-      update_interval: 1s
-      dsp_filters: [f_ics43434, f_fine_230]
-    - type: eq
-      name: Fine 235 Hz
-      id: fine_235
-      unit_of_measurement: dB
-      accuracy_decimals: 1
-      update_interval: 1s
-      dsp_filters: [f_ics43434, f_fine_235]
-    - type: eq
-      name: Fine 240 Hz
-      id: fine_240
-      unit_of_measurement: dB
-      accuracy_decimals: 1
-      update_interval: 1s
-      dsp_filters: [f_ics43434, f_fine_240]
-    - type: eq
-      name: Fine 245 Hz
-      id: fine_245
-      unit_of_measurement: dB
-      accuracy_decimals: 1
-      update_interval: 1s
-      dsp_filters: [f_ics43434, f_fine_245]
-    - type: eq
-      name: Fine 250 Hz
-      id: fine_250
-      unit_of_measurement: dB
-      accuracy_decimals: 1
-      update_interval: 1s
-      dsp_filters: [f_ics43434, f_fine_250]
-    - type: eq
-      name: Fine 255 Hz
-      id: fine_255
-      unit_of_measurement: dB
-      accuracy_decimals: 1
-      update_interval: 1s
-      dsp_filters: [f_ics43434, f_fine_255]
-    - type: eq
-      name: Fine 260 Hz
-      id: fine_260
-      unit_of_measurement: dB
-      accuracy_decimals: 1
-      update_interval: 1s
-      dsp_filters: [f_ics43434, f_fine_260]
-    - type: eq
-      name: Fine 265 Hz
-      id: fine_265
-      unit_of_measurement: dB
-      accuracy_decimals: 1
-      update_interval: 1s
-      dsp_filters: [f_ics43434, f_fine_265]
-    - type: eq
-      name: Fine 270 Hz
-      id: fine_270
-      unit_of_measurement: dB
-      accuracy_decimals: 1
-      update_interval: 1s
-      dsp_filters: [f_ics43434, f_fine_270]
-    # === FINE 5Hz 190-270 END ===
 
 sensor:
   - platform: wifi_signal

@@ -1137,6 +1137,11 @@ main {
   margin-top: 0.45rem;
 }
 
+.chart-fine-spec-y {
+  height: 22.5rem; /* = CHART_FINE_SPEC_HEIGHT 360px */
+  font-size: 0.55rem;
+}
+
 .chart-spec-unavailable {
   box-sizing: border-box;
   display: flex;

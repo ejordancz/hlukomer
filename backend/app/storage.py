@@ -43,11 +43,22 @@ SPECTRUM_BANDS: tuple[str, ...] = (
 )
 SPECTRUM_COLS: tuple[str, ...] = tuple(f"oct_{b}" for b in SPECTRUM_BANDS)
 
-# Jemné lineární pásma 5 Hz: 190, 195, …, 270 Hz (ESP spectrum_fine[]).
-FINE_SPECTRUM_HZ: tuple[int, ...] = tuple(range(190, 271, 5))
-FINE_SPECTRUM_BANDS: tuple[str, ...] = tuple(str(hz) for hz in FINE_SPECTRUM_HZ)
-FINE_SPECTRUM_COLS: tuple[str, ...] = tuple(
-    f"fine_{b}" for b in FINE_SPECTRUM_BANDS
+# High-res FFT 190–270 Hz (1 Hz bins, 3 s energy average → spectrum_fine_3s).
+FINE_FFT_F0_HZ = 190
+FINE_FFT_F1_HZ = 270
+FINE_FFT_DF_HZ = 1.0
+FINE_FFT_INTEGRATE_S = 3
+FINE_FFT_N_BINS = FINE_FFT_F1_HZ - FINE_FFT_F0_HZ + 1  # 81
+FINE_FFT_HZ: tuple[int, ...] = tuple(
+    range(FINE_FFT_F0_HZ, FINE_FFT_F1_HZ + 1, int(FINE_FFT_DF_HZ))
+)
+FINE_FFT_BANDS: tuple[str, ...] = tuple(str(hz) for hz in FINE_FFT_HZ)
+FINE_FFT_DB0 = 0.0
+FINE_FFT_DB_STEP = 0.5
+
+# Staré IIR wide sloupce (drop bez náhrady).
+LEGACY_FINE_COLS: tuple[str, ...] = tuple(
+    f"fine_{hz}" for hz in range(190, 271, 5)
 )
 
 LIVE_VALUE_COLS: tuple[str, ...] = (
@@ -55,7 +66,6 @@ LIVE_VALUE_COLS: tuple[str, ...] = (
     "lez_1s",
     "lfi_db",
     *SPECTRUM_COLS,
-    *FINE_SPECTRUM_COLS,
 )
 MINUTE_COLS: tuple[str, ...] = ("laeq_1min", "lamax_1min", "lamin_1min")
 
@@ -136,6 +146,83 @@ def ensure_live_columns(conn: sqlite3.Connection) -> None:
                 conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} REAL")
 
 
+def ensure_fine_fft_table(conn: sqlite3.Connection) -> None:
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS spectrum_fine_3s (
+            device_id TEXT NOT NULL,
+            ts REAL NOT NULL,
+            n_bins INTEGER NOT NULL DEFAULT 81,
+            f0_hz REAL NOT NULL DEFAULT 190,
+            df_hz REAL NOT NULL DEFAULT 1,
+            db0 REAL NOT NULL DEFAULT 0,
+            payload BLOB NOT NULL,
+            PRIMARY KEY (device_id, ts)
+        ) WITHOUT ROWID;
+        """
+    )
+
+
+def drop_legacy_fine_columns(conn: sqlite3.Connection) -> None:
+    """Hard-drop starých IIR sloupců fine_* (data i struktura, bez migrace)."""
+    legacy = set(LEGACY_FINE_COLS)
+    for table in ("samples_1s", "samples_5s"):
+        if not table_exists(conn, table):
+            continue
+        existing = _table_columns(conn, table)
+        to_drop = [c for c in LEGACY_FINE_COLS if c in existing]
+        if not to_drop:
+            continue
+        dropped = 0
+        for col in to_drop:
+            try:
+                conn.execute(f"ALTER TABLE {table} DROP COLUMN {col}")
+                dropped += 1
+            except sqlite3.OperationalError:
+                logger.warning(
+                    "DROP COLUMN %s.%s selhal — recreate tabulky", table, col
+                )
+                _recreate_wide_table_without_legacy(conn, table, legacy)
+                dropped = -1
+                break
+        if dropped > 0:
+            logger.info("Dropped %s legacy fine columns from %s", dropped, table)
+        elif dropped == -1:
+            logger.info("Recreated %s without legacy fine columns", table)
+
+
+def _recreate_wide_table_without_legacy(
+    conn: sqlite3.Connection, table: str, legacy: set[str]
+) -> None:
+    """SQLite fallback, když ALTER DROP COLUMN není dostupný."""
+    info = list(conn.execute(f"PRAGMA table_info({table})"))
+    keep_cols = [str(r[1]) for r in info if str(r[1]) not in legacy]
+    if len(keep_cols) == len(info):
+        return
+    col_defs: list[str] = []
+    for r in info:
+        name = str(r[1])
+        if name in legacy:
+            continue
+        ctype = str(r[2] or "REAL")
+        notnull = " NOT NULL" if int(r[3] or 0) else ""
+        dflt = r[4]
+        dflt_sql = f" DEFAULT {dflt}" if dflt is not None else ""
+        col_defs.append(f"{name} {ctype}{notnull}{dflt_sql}")
+    tmp = f"{table}__nofine"
+    cols_csv = ", ".join(keep_cols)
+    conn.execute(f"DROP TABLE IF EXISTS {tmp}")
+    conn.execute(
+        f"CREATE TABLE {tmp} ({', '.join(col_defs)}, "
+        f"PRIMARY KEY (device_id, ts)) WITHOUT ROWID"
+    )
+    conn.execute(
+        f"INSERT INTO {tmp} ({cols_csv}) SELECT {cols_csv} FROM {table}"
+    )
+    conn.execute(f"DROP TABLE {table}")
+    conn.execute(f"ALTER TABLE {tmp} RENAME TO {table}")
+
+
 def ensure_wide_tables(conn: sqlite3.Connection) -> None:
     cols_1s = ",\n                ".join(f"{c} REAL" for c in LIVE_VALUE_COLS)
     cols_5s = cols_1s + ",\n                n_src INTEGER NOT NULL DEFAULT 1"
@@ -163,6 +250,8 @@ def ensure_wide_tables(conn: sqlite3.Connection) -> None:
         """
     )
     ensure_live_columns(conn)
+    drop_legacy_fine_columns(conn)
+    ensure_fine_fft_table(conn)
 
 
 def upsert_sample_1s(
@@ -245,8 +334,6 @@ def ingest_live(
     lfi_db: Optional[float] = None,
     spectrum: Optional[list[float]] = None,
     spectrum_cols: Optional[tuple[str, ...]] = None,
-    spectrum_fine: Optional[list[float]] = None,
-    spectrum_fine_cols: Optional[tuple[str, ...]] = None,
 ) -> int:
     values: dict[str, Optional[float]] = {
         "laeq_1s": laeq_1s,
@@ -256,10 +343,126 @@ def ingest_live(
     if spectrum is not None and spectrum_cols is not None:
         for col, val in zip(spectrum_cols, spectrum):
             values[col] = val
-    if spectrum_fine is not None and spectrum_fine_cols is not None:
-        for col, val in zip(spectrum_fine_cols, spectrum_fine):
-            values[col] = val
     return upsert_sample_1s(conn, ts, device_id, values)
+
+
+def pack_fine_fft_payload(
+    values_db: list[float],
+    *,
+    db0: float = FINE_FFT_DB0,
+    step: float = FINE_FFT_DB_STEP,
+) -> bytes:
+    if len(values_db) != FINE_FFT_N_BINS:
+        raise ValueError(f"expected {FINE_FFT_N_BINS} bins, got {len(values_db)}")
+    out = bytearray(FINE_FFT_N_BINS)
+    for i, raw in enumerate(values_db):
+        v = sanitize_value(float(raw))
+        if v is None:
+            out[i] = 0
+            continue
+        q = int(round((v - db0) / step))
+        out[i] = 0 if q < 0 else 255 if q > 255 else q
+    return bytes(out)
+
+
+def unpack_fine_fft_payload(
+    payload: bytes,
+    *,
+    db0: float = FINE_FFT_DB0,
+    step: float = FINE_FFT_DB_STEP,
+    n_bins: int = FINE_FFT_N_BINS,
+) -> list[float]:
+    data = payload[:n_bins]
+    return [round(db0 + b * step, 1) for b in data]
+
+
+def fine_fft_bucket_start(ts: float) -> float:
+    return math.floor(ts / FINE_FFT_INTEGRATE_S) * FINE_FFT_INTEGRATE_S
+
+
+def upsert_spectrum_fine_3s(
+    conn: sqlite3.Connection,
+    ts: float,
+    device_id: str,
+    values_db: list[float],
+    *,
+    f0_hz: float = float(FINE_FFT_F0_HZ),
+    df_hz: float = FINE_FFT_DF_HZ,
+    db0: float = FINE_FFT_DB0,
+) -> int:
+    if len(values_db) != FINE_FFT_N_BINS:
+        raise ValueError(f"spectrum_fine must have {FINE_FFT_N_BINS} values")
+    bucket = fine_fft_bucket_start(ts)
+    payload = pack_fine_fft_payload(values_db, db0=db0)
+    conn.execute(
+        """
+        INSERT INTO spectrum_fine_3s
+            (device_id, ts, n_bins, f0_hz, df_hz, db0, payload)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(device_id, ts) DO UPDATE SET
+            n_bins = excluded.n_bins,
+            f0_hz = excluded.f0_hz,
+            df_hz = excluded.df_hz,
+            db0 = excluded.db0,
+            payload = excluded.payload
+        """,
+        (
+            device_id,
+            bucket,
+            FINE_FFT_N_BINS,
+            f0_hz,
+            df_hz,
+            db0,
+            payload,
+        ),
+    )
+    return 1
+
+
+def fetch_spectrum_fine_columns_raw(
+    conn: sqlite3.Connection,
+    device_id: str,
+    t_start: float,
+    t_end: float,
+) -> list[tuple[float, list[float]]]:
+    """(t_mid, values_db[81]) z spectrum_fine_3s; t_mid = bucket_start + 1.5 s."""
+    if not table_exists(conn, "spectrum_fine_3s"):
+        return []
+    rows = conn.execute(
+        """
+        SELECT ts, n_bins, db0, payload
+        FROM spectrum_fine_3s
+        WHERE device_id = ? AND ts >= ? AND ts <= ?
+        ORDER BY ts ASC
+        """,
+        (device_id, t_start - FINE_FFT_INTEGRATE_S, t_end),
+    ).fetchall()
+    out: list[tuple[float, list[float]]] = []
+    half = FINE_FFT_INTEGRATE_S / 2.0
+    for r in rows:
+        ts0 = float(r["ts"])
+        t_mid = ts0 + half
+        if ts0 + FINE_FFT_INTEGRATE_S < t_start or ts0 > t_end:
+            continue
+        n_bins = int(r["n_bins"] or FINE_FFT_N_BINS)
+        db0 = float(r["db0"] if r["db0"] is not None else FINE_FFT_DB0)
+        payload = r["payload"]
+        if payload is None:
+            continue
+        if isinstance(payload, memoryview):
+            payload = payload.tobytes()
+        elif not isinstance(payload, (bytes, bytearray)):
+            payload = bytes(payload)
+        if len(payload) < n_bins:
+            continue
+        vals = unpack_fine_fft_payload(payload, db0=db0, n_bins=n_bins)
+        if len(vals) < FINE_FFT_N_BINS:
+            pad = vals[-1] if vals else 0.0
+            vals = vals + [pad] * (FINE_FFT_N_BINS - len(vals))
+        elif len(vals) > FINE_FFT_N_BINS:
+            vals = vals[:FINE_FFT_N_BINS]
+        out.append((t_mid, vals))
+    return out
 
 
 def latest_row_1s(
@@ -566,6 +769,8 @@ def prune_storage(
     conn.execute("DELETE FROM samples_minute WHERE ts < ?", (cutoff_all,))
     # 1s starší než retention (když archive neběžel) — bezpečnost
     conn.execute("DELETE FROM samples_1s WHERE ts < ?", (cutoff_all,))
+    if table_exists(conn, "spectrum_fine_3s"):
+        conn.execute("DELETE FROM spectrum_fine_3s WHERE ts < ?", (cutoff_all,))
     conn.execute("DELETE FROM weather_snapshots WHERE ts < ?", (cutoff_all,))
     if aircraft_cutoff is not None:
         conn.execute(
@@ -590,6 +795,7 @@ def storage_status(conn: sqlite3.Connection) -> dict[str, Any]:
             "samples_1s": count("samples_1s"),
             "samples_5s": count("samples_5s"),
             "samples_minute": count("samples_minute"),
+            "spectrum_fine_3s": count("spectrum_fine_3s"),
         },
     }
 
