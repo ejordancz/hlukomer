@@ -155,8 +155,6 @@ const state = {
   /** Fisheye fokus na fine spektrogramu (0 = nahoře, 1 = dole), null = vypnuto. */
   fineSpecLensNorm: null,
   fineSpecLensRaf: 0,
-  /** Váhy řádků (shora dolů) z posledního vykreslení fine heatmapy. */
-  fineSpecRowWeights: null,
   /**
    * WASD navigace nad spektrogramem:
    * skrytý OS kurzor + virtuální bod (clientX/Y), anchorMouse* pro detekci pohybu myši.
@@ -1835,9 +1833,138 @@ function hideChartCrosshair() {
   state.hoverTs = null;
   const el = $("chartCrosshair");
   if (el) el.hidden = true;
+  hideChartHCrosshair();
   hideChartHoverPanel();
   hideSpecTooltip();
   clearFineLens();
+}
+
+function hideChartHCrosshair() {
+  const el = $("chartCrosshairH");
+  if (el) el.hidden = true;
+}
+
+/** Vodorovná linka kříže v ploše aktuálního grafu. */
+function showChartHCrosshair(plotRect, clientY) {
+  const el = $("chartCrosshairH");
+  const wrap = document.querySelector(".chart-wrap");
+  if (!el || !wrap || !plotRect) {
+    hideChartHCrosshair();
+    return;
+  }
+  const wrapRect = wrap.getBoundingClientRect();
+  const y = Math.min(plotRect.bottom, Math.max(plotRect.top, clientY));
+  const left = plotRect.left - wrapRect.left;
+  const width = Math.max(0, plotRect.right - plotRect.left);
+  el.hidden = false;
+  el.style.left = `${left}px`;
+  el.style.width = `${width}px`;
+  el.style.top = `${y - wrapRect.top}px`;
+}
+
+/**
+ * Plocha grafu pod kurzorem (pro vodorovnou linku kříže).
+ * @returns {{ id: string, plotRect: { left: number, right: number, top: number, bottom: number }, clientY: number } | null}
+ */
+function chartPlotHitAt(clientX, clientY) {
+  const specs = [
+    {
+      id: "fine",
+      stripId: "chartFineSpecStrip",
+      canvasId: "chartFineSpectrogram",
+      bodySel: ".chart-fine-spec-body",
+      enabled: () => fineSpectrumVisible(),
+    },
+    {
+      id: "main",
+      stripId: "chartSpecStrip",
+      canvasId: "chartSpectrogram",
+      bodySel: ".chart-spec-body",
+      enabled: () => chartSpecEnabled(),
+    },
+  ];
+  for (const s of specs) {
+    if (!s.enabled()) continue;
+    const strip = $(s.stripId);
+    const canvas = $(s.canvasId);
+    if (!strip || strip.hidden || !canvas) continue;
+    const body = strip.querySelector(s.bodySel) || strip;
+    const bodyRect = body.getBoundingClientRect();
+    if (
+      clientX < bodyRect.left ||
+      clientX > bodyRect.right ||
+      clientY < bodyRect.top ||
+      clientY > bodyRect.bottom
+    ) {
+      continue;
+    }
+    const rect = canvas.getBoundingClientRect();
+    return {
+      id: s.id,
+      plotRect: { left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom },
+      clientY: Math.min(rect.bottom, Math.max(rect.top, clientY)),
+    };
+  }
+
+  const excessStrip = $("chartExcessStrip");
+  const excessCanvas = $("chartExcess");
+  if (excessStrip && !excessStrip.hidden && excessCanvas) {
+    const body = excessStrip.querySelector(".chart-excess-body") || excessStrip;
+    const bodyRect = body.getBoundingClientRect();
+    if (
+      clientX >= bodyRect.left &&
+      clientX <= bodyRect.right &&
+      clientY >= bodyRect.top &&
+      clientY <= bodyRect.bottom
+    ) {
+      const rect = excessCanvas.getBoundingClientRect();
+      return {
+        id: "excess",
+        plotRect: { left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom },
+        clientY: Math.min(rect.bottom, Math.max(rect.top, clientY)),
+      };
+    }
+  }
+
+  const chart = state.chart;
+  const canvas = $("chart");
+  if (chart?.chartArea && canvas) {
+    const rect = canvas.getBoundingClientRect();
+    const ca = chart.chartArea;
+    const plotRect = {
+      left: rect.left + ca.left,
+      right: rect.left + ca.right,
+      top: rect.top + ca.top,
+      bottom: rect.top + ca.bottom,
+    };
+    // Celý canvas včetně os — kříž zůstane i u okraje / Y stupnice Chart.js
+    if (
+      clientX >= rect.left &&
+      clientX <= rect.right &&
+      clientY >= rect.top &&
+      clientY <= rect.bottom
+    ) {
+      return {
+        id: "chart",
+        plotRect,
+        clientY: Math.min(plotRect.bottom, Math.max(plotRect.top, clientY)),
+      };
+    }
+  }
+  return null;
+}
+
+/** Čas z X; při X mimo plot (Y stupnice) clamp na okraj chart area. */
+function timeFromChartClientXClamped(clientX) {
+  let ts = timeFromChartClientX(clientX);
+  if (ts != null) return ts;
+  const chart = state.chart;
+  const canvas = $("chart");
+  if (!chart?.chartArea || !canvas) return null;
+  const rect = canvas.getBoundingClientRect();
+  const ca = chart.chartArea;
+  const clamped = Math.min(rect.left + ca.right, Math.max(rect.left + ca.left, clientX));
+  return timeFromChartClientX(clamped);
 }
 
 const SPEC_KBD_STEP_PX = 6;
@@ -1912,9 +2039,17 @@ function applySpecVirtualPointer(clientX, clientY, target) {
   const y = Math.min(hit.rect.bottom, Math.max(hit.rect.top, clientY));
   positionSpecPointer(x, y);
 
-  const ts = timeFromChartClientX(x);
-  if (ts != null) showChartCrosshair(ts);
-  else hideChartHoverPanel();
+  const ts = timeFromChartClientXClamped(x);
+  if (ts != null) {
+    showChartCrosshair(ts);
+    showChartHCrosshair(
+      { left: hit.rect.left, right: hit.rect.right, top: hit.rect.top, bottom: hit.rect.bottom },
+      y
+    );
+  } else {
+    hideChartHoverPanel();
+    hideChartHCrosshair();
+  }
 
   if (hit.target === "fine") {
     scheduleFineLens((y - hit.rect.top) / Math.max(1, hit.rect.height));
@@ -2049,6 +2184,7 @@ function hideSpecTooltip() {
     const bars = $(id);
     if (bars) {
       bars.hidden = true;
+      bars.classList.remove("is-fisheye");
       bars.innerHTML = "";
     }
   }
@@ -2093,22 +2229,17 @@ function showSpecTooltip(tsSec, _lineLeft) {
           )
         : null;
     if (fineCol?.v?.length) {
-      if (!(state.fineSpecTooltipColTs === fineCol.t && !fineBarsEl.hidden)) {
+      const sameCol =
+        state.fineSpecTooltipColTs === fineCol.t && !fineBarsEl.hidden;
+      // Při lupě vždy překreslit — váhy řádků se mění s kurzorem.
+      if (!sameCol || fineSpecZoomEnabled()) {
         state.fineSpecTooltipColTs = fineCol.t;
-        const labels = state.chartFineSpectrogram?.labels || [];
-        const bandIds = state.chartFineSpectrogram?.bands || [];
-        fillSpecBars(
-          fineBarsEl,
-          fineCol,
-          labels,
-          bandIds,
-          null,
-          state.fineSpecRowWeights
-        );
+        fillFineSpecBars(fineBarsEl, fineCol);
       }
       any = true;
     } else {
       fineBarsEl.hidden = true;
+      fineBarsEl.classList.remove("is-fisheye");
       fineBarsEl.innerHTML = "";
       state.fineSpecTooltipColTs = null;
     }
@@ -2254,10 +2385,10 @@ function scheduleFineLens(norm) {
   if (state.fineSpecLensRaf) return;
   state.fineSpecLensRaf = requestAnimationFrame(() => {
     state.fineSpecLensRaf = 0;
+    // Heatmapa i Y stupnice musí sdílet stejné fisheye hrany — jinak je
+    // frekvence u kříže posunutá vůči vodorovné lince.
     drawChartFineSpectrogram();
-    // force přepočet flex vah u dB sloupců
-    state.fineSpecTooltipColTs = null;
-    if (state.hoverTs != null) showSpecTooltip(state.hoverTs);
+    refreshFineSpecBarsLens();
   });
 }
 
@@ -2269,11 +2400,73 @@ function clearFineLens() {
     state.fineSpecLensRaf = 0;
   }
   drawChartFineSpectrogram();
-  state.fineSpecTooltipColTs = null;
-  if (state.hoverTs != null) showSpecTooltip(state.hoverTs);
+  refreshFineSpecBarsLens();
 }
 
-function fillSpecBars(barsEl, col, labels, bandIds, lfBands, rowWeights) {
+/** Překreslí dB sloupce pod lupou (stejný fisheye jako Y stupnice). */
+function refreshFineSpecBarsLens() {
+  const fineBarsEl = $("chartFineSpecBars");
+  if (!fineBarsEl || fineBarsEl.hidden || !fineSpectrumVisible()) return;
+  const ts = state.fineSpecTooltipColTs ?? state.hoverTs;
+  if (ts == null) return;
+  const fineCol = nearestSpecColumnFrom(
+    state.chartFineSpectrogram,
+    ts,
+    FINE_SPEC_HOVER_MAX_DIST_S
+  );
+  if (!fineCol?.v?.length) return;
+  fillFineSpecBars(fineBarsEl, fineCol);
+}
+
+function fineLensRowIsHot(weight, meanW) {
+  return weight >= meanW * 2.2;
+}
+
+function renderFineSpecYLabels(yEl, labels, hzList, weights, lensOn) {
+  const nBands = labels.length;
+  const meanW = weights.reduce((a, b) => a + b, 0) / nBands;
+  yEl.classList.toggle("is-fisheye", lensOn);
+  yEl.innerHTML = [...labels]
+    .map((lab, i) => {
+      const row = nBands - 1 - i;
+      const hz = hzList[i];
+      const hot =
+        lensOn &&
+        fineLensRowIsHot(weights[row], meanW) &&
+        Number.isFinite(Number(hz));
+      // Pod lupou jen čitelné Hz v ohnisku — okolní dekádové popisky jsou nečitelné.
+      let text = "";
+      if (hot) text = `${Math.round(Number(hz))}`;
+      else if (!lensOn) text = fineSpecYLabel(lab, hz);
+      const flex = lensOn ? `flex:${weights[row].toFixed(3)} 1 0;` : "";
+      const cls = hot ? ' class="is-lens-hot"' : "";
+      return `<span${cls} style="${flex}">${text || ""}</span>`;
+    })
+    .reverse()
+    .join("");
+}
+
+function fillFineSpecBars(fineBarsEl, fineCol) {
+  const labels = state.chartFineSpectrogram?.labels || [];
+  const bandIds = state.chartFineSpectrogram?.bands || [];
+  const nBands = labels.length || fineCol.v?.length || 0;
+  const focus = fineSpecZoomEnabled() ? state.fineSpecLensNorm : null;
+  const { weights } = fisheyeBandLayout(
+    nBands,
+    CHART_FINE_SPEC_HEIGHT,
+    focus,
+    FINE_LENS_STRENGTH,
+    FINE_LENS_RADIUS
+  );
+  fillSpecBars(fineBarsEl, fineCol, labels, bandIds, null, {
+    rowWeights: focus != null ? weights : null,
+    lensOn: focus != null,
+  });
+}
+
+function fillSpecBars(barsEl, col, labels, bandIds, lfBands, opts = null) {
+  const rowWeights = opts?.rowWeights || null;
+  const lensOn = !!opts?.lensOn && !!rowWeights?.length;
   const off = windowOffset();
   const bands = col.v.map((v, i) => ({
     band: bandIds?.[i] || "",
@@ -2282,7 +2475,11 @@ function fillSpecBars(barsEl, col, labels, bandIds, lfBands, rowWeights) {
   }));
   const { vmin, vmax, span } = spectrumStats(bands);
   const topFirst = [...bands].reverse();
+  const meanW = lensOn
+    ? rowWeights.reduce((a, b) => a + b, 0) / rowWeights.length
+    : 1;
 
+  barsEl.classList.toggle("is-fisheye", lensOn);
   barsEl.innerHTML = topFirst
     .map((b, row) => {
       const v = Number(b.value);
@@ -2291,10 +2488,15 @@ function fillSpecBars(barsEl, col, labels, bandIds, lfBands, rowWeights) {
         : Math.max(6, Math.min(100, ((v - vmin) / span) * 100));
       const hot = !Number.isNaN(v) && v >= vmax - 1.5;
       const lf = lfBands ? lfBands.has(String(b.band)) : true;
-      const cls = `chart-spec-bar${hot ? " is-hot" : ""}${lf ? " is-lf" : ""}`;
-      const txt = Number.isNaN(v) ? "—" : fmtDb(v);
+      const lensHot = lensOn && fineLensRowIsHot(rowWeights[row], meanW);
+      const cls =
+        `chart-spec-bar${hot ? " is-hot" : ""}${lf ? " is-lf" : ""}` +
+        `${lensHot ? " is-lens-hot" : ""}${lensOn && !lensHot ? " is-lens-dim" : ""}`;
+      // Pod lupou zobraz jen dB v ohnisku (zvětšené) — zbytek je nečitelný.
+      const txt =
+        lensOn && !lensHot ? "" : Number.isNaN(v) ? "—" : fmtDb(v);
       const flex =
-        rowWeights && rowWeights[row] != null
+        lensOn && rowWeights[row] != null
           ? `flex:${Number(rowWeights[row]).toFixed(3)} 1 0;`
           : "";
       return (
@@ -2348,7 +2550,6 @@ function drawHeatmapSpectrogram({
       yEl.classList.remove("is-fisheye");
       yEl.innerHTML = "";
     }
-    if (fisheye) state.fineSpecRowWeights = null;
     return;
   }
 
@@ -2359,6 +2560,7 @@ function drawHeatmapSpectrogram({
   const nBands = labels.length || (cols[0].v?.length ?? 0);
   if (!nBands) return;
 
+  // Stejné fisheye hrany pro heatmapu i Y stupnici (kříž ↔ frekvence).
   const focus = fisheye ? state.fineSpecLensNorm : null;
   const { edges, weights } = fisheyeBandLayout(
     nBands,
@@ -2367,27 +2569,17 @@ function drawHeatmapSpectrogram({
     FINE_LENS_STRENGTH,
     FINE_LENS_RADIUS
   );
-  if (fisheye) state.fineSpecRowWeights = weights;
-
-  if (yEl) {
-    const meanW = weights.reduce((a, b) => a + b, 0) / nBands;
-    const lensOn = focus != null;
-    yEl.classList.toggle("is-fisheye", lensOn);
-    // high freq nahoře
+  if (fisheye) {
+    if (yEl) {
+      renderFineSpecYLabels(yEl, labels, hzList, weights, focus != null);
+    }
+  } else if (yEl) {
+    yEl.classList.remove("is-fisheye");
     yEl.innerHTML = [...labels]
       .map((lab, i) => {
-        const row = nBands - 1 - i;
         const hz = hzList[i];
-        let text = yLabelFn ? yLabelFn(lab, hz) : lab;
-        const hot =
-          lensOn &&
-          weights[row] >= meanW * 2.2 &&
-          Number.isFinite(Number(hz));
-        // Jen v jádru lupy: každý Hz + větší text.
-        if (hot) text = `${Math.round(Number(hz))}`;
-        const flex = lensOn ? `flex:${weights[row].toFixed(3)} 1 0;` : "";
-        const cls = hot ? ' class="is-lens-hot"' : "";
-        return `<span${cls} style="${flex}">${text || ""}</span>`;
+        const text = yLabelFn ? yLabelFn(lab, hz) : lab;
+        return `<span>${text || ""}</span>`;
       })
       .reverse()
       .join("");
@@ -2425,7 +2617,7 @@ function drawHeatmapSpectrogram({
     }
   }
 
-  // Jemný pás lupy
+  // Jemný pás lupy kolem ohniska
   if (fisheye && focus != null) {
     const cy = focus * h;
     const band = FINE_LENS_RADIUS * h * 1.6;
@@ -2913,6 +3105,7 @@ function bindChartCrosshair() {
       // pokračovat běžným hoverem podle aktuální myši
     }
 
+    const plot = chartPlotHitAt(ev.clientX, ev.clientY);
     const specHit = spectrogramHitAt(ev.clientX, ev.clientY);
     if (specHit) {
       state.specPointerLast = { clientX: ev.clientX, clientY: ev.clientY, target: specHit.target };
@@ -2920,41 +3113,32 @@ function bindChartCrosshair() {
       state.specPointerLast = null;
     }
 
-    const onSurface = ev.target.closest?.(
-      "#chart, #chartExcess, #chartSpectrogram, #chartFineSpectrogram, .chart-excess-strip, .chart-spec-strip, .chart-spec-canvas-wrap, .chart-axis-labels"
-    );
+    // Kříž vždy nad plochami grafů (canvas, Y stupnice, dB sloupce) i nad časovou osou
+    const onSurface =
+      !!plot ||
+      !!ev.target.closest?.(
+        "#chart, #chartExcess, #chartSpectrogram, #chartFineSpectrogram, .chart-excess-body, .chart-spec-body, .chart-fine-spec-body, .chart-excess-y, .chart-spec-y, .chart-spec-canvas-wrap, .chart-axis-labels"
+      );
     if (!onSurface) {
       hideChartCrosshair();
       return;
     }
-    const ts = timeFromChartClientX(ev.clientX);
+    const ts = timeFromChartClientXClamped(ev.clientX);
     if (ts == null) {
       hideChartCrosshair();
       return;
     }
 
-    const fineCanvas = $("chartFineSpectrogram");
-    const fineStrip = $("chartFineSpecStrip");
-    if (
-      fineCanvas &&
-      fineStrip &&
-      !fineStrip.hidden &&
-      fineSpectrumVisible()
-    ) {
-      const rect = fineCanvas.getBoundingClientRect();
-      const overFine =
-        ev.clientX >= rect.left &&
-        ev.clientX <= rect.right &&
-        ev.clientY >= rect.top &&
-        ev.clientY <= rect.bottom;
-      if (overFine) {
-        scheduleFineLens((ev.clientY - rect.top) / Math.max(1, rect.height));
-      } else if (state.fineSpecLensNorm != null) {
-        clearFineLens();
-      }
+    if (plot?.id === "fine") {
+      const h = Math.max(1, plot.plotRect.bottom - plot.plotRect.top);
+      scheduleFineLens((plot.clientY - plot.plotRect.top) / h);
+    } else if (state.fineSpecLensNorm != null) {
+      clearFineLens();
     }
 
     showChartCrosshair(ts);
+    if (plot) showChartHCrosshair(plot.plotRect, plot.clientY);
+    else hideChartHCrosshair();
   });
   stack.addEventListener("mouseleave", () => {
     state.specPointerLast = null;
@@ -3065,7 +3249,10 @@ function bind() {
     if (!btn || !aircraftRow.contains(btn)) return;
     const id = Number(btn.getAttribute("data-aircraft-id"));
     const item = (state.aircraftOverflights || []).find((a) => a.id === id);
-    if (item) showChartCrosshair(item.t);
+    if (item) {
+      hideChartHCrosshair();
+      showChartCrosshair(item.t);
+    }
   });
   aircraftRow?.addEventListener("pointerout", (ev) => {
     const btn = ev.target.closest?.(".aircraft-slot");

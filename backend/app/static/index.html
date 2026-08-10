@@ -9,7 +9,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,700&family=IBM+Plex+Mono:wght@400;500&family=Sora:wght@400;500;600&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/static/style.css?v=80" />
+  <link rel="stylesheet" href="/static/style.css?v=81" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@mdi/font@7.4.47/css/materialdesignicons.min.css" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.9/dist/chart.umd.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
@@ -177,65 +177,76 @@
       </div>
 
       <section class="chart-wrap">
-        <div class="chart-legend" aria-hidden="true">
-          <span class="chart-legend-item"><span class="swatch day"></span>den</span>
-          <span class="chart-legend-item"><span class="swatch night"></span>noc</span>
-          <span class="chart-legend-item"><span class="swatch limit"></span>limit</span>
-          <span class="chart-legend-item"><span class="swatch excess"></span>překročení</span>
-          <span class="chart-legend-item" id="legendAircraft"><span class="swatch aircraft" aria-hidden="true"><span class="mdi mdi-airplane"></span></span>přelet</span>
-        </div>
         <div class="chart-stack" id="chartStack">
+          <div class="chart-laeq-head">
+            <p class="chart-pane-title">Průběh LAeq</p>
+            <div class="chart-legend" aria-hidden="true">
+              <span class="chart-legend-item"><span class="swatch day"></span>den</span>
+              <span class="chart-legend-item"><span class="swatch night"></span>noc</span>
+              <span class="chart-legend-item"><span class="swatch limit"></span>limit</span>
+              <span class="chart-legend-item" id="legendAircraft"><span class="swatch aircraft" aria-hidden="true"><span class="mdi mdi-airplane"></span></span>přelet</span>
+            </div>
+          </div>
           <canvas id="chart" height="120"></canvas>
           <div class="chart-excess-strip" id="chartExcessStrip">
-            <div class="chart-excess-y" id="chartExcessYLabels" aria-hidden="true"></div>
-            <div class="chart-excess-plot">
-              <div class="chart-excess-unit" aria-hidden="true">ΔdB</div>
-              <div class="chart-excess-canvas-wrap" id="chartExcessCanvasWrap">
-                <canvas id="chartExcess" height="72" role="img" aria-label="Překročení limitu"></canvas>
+            <p class="chart-pane-title">Překročení limitu</p>
+            <div class="chart-excess-body">
+              <div class="chart-excess-y" id="chartExcessYLabels" aria-hidden="true"></div>
+              <div class="chart-excess-plot">
+                <div class="chart-excess-unit" aria-hidden="true">ΔdB</div>
+                <div class="chart-excess-canvas-wrap" id="chartExcessCanvasWrap">
+                  <canvas id="chartExcess" height="72" role="img" aria-label="Překročení limitu"></canvas>
+                </div>
               </div>
             </div>
           </div>
           <div class="chart-spec-strip" id="chartSpecStrip" hidden>
-            <div class="chart-spec-y" id="chartSpecYLabels" aria-hidden="true"></div>
-            <div class="chart-spec-plot">
-              <div class="chart-spec-unit" aria-hidden="true">dB</div>
-              <div class="chart-spec-canvas-wrap" id="chartSpecCanvasWrap">
-                <div class="chart-spec-bars" id="chartSpecBars" hidden aria-hidden="true"></div>
-                <canvas id="chartSpectrogram" height="288" role="img" aria-label="Spektrogram pod grafem"></canvas>
+            <p class="chart-pane-title">Spektrogram 1/3 oktávy</p>
+            <div class="chart-spec-body">
+              <div class="chart-spec-y" id="chartSpecYLabels" aria-hidden="true"></div>
+              <div class="chart-spec-plot">
+                <div class="chart-spec-unit" aria-hidden="true">dB</div>
+                <div class="chart-spec-canvas-wrap" id="chartSpecCanvasWrap">
+                  <div class="chart-spec-bars" id="chartSpecBars" hidden aria-hidden="true"></div>
+                  <canvas id="chartSpectrogram" height="288" role="img" aria-label="Spektrogram 1/3 oktávy"></canvas>
+                </div>
               </div>
             </div>
           </div>
           <div class="chart-spec-strip chart-fine-spec-strip" id="chartFineSpecStrip" hidden>
             <div class="chart-fine-spec-head">
-              <div
-                class="chart-zoom-toggle"
-                title="Přiblížení frekvencí u kurzoru"
-              >
-                <span class="mdi mdi-magnify chart-zoom-icon" aria-hidden="true"></span>
-                <span class="chart-zoom-label" id="labelFineSpecZoom">Zoom</span>
-                <button
-                  type="button"
-                  class="pill-switch"
-                  id="switchFineSpecZoom"
-                  role="switch"
-                  aria-checked="true"
-                  aria-labelledby="labelFineSpecZoom"
+              <p class="chart-pane-title">Spektrogram 190–270 Hz</p>
+              <div class="chart-fine-spec-controls">
+                <div
+                  class="chart-zoom-toggle"
+                  title="Přiblížení frekvencí na stupnici u kurzoru"
                 >
-                  <span class="pill-switch-thumb" aria-hidden="true"></span>
-                </button>
-              </div>
-              <div class="chart-spec-info" id="chartSpecKbdInfo">
-                <button
-                  type="button"
-                  class="chart-spec-info-btn"
-                  id="chartSpecKbdInfoBtn"
-                  aria-describedby="chartSpecKbdInfoTip"
-                  aria-label="Ovládání kurzoru"
-                >
-                  i
-                </button>
-                <div class="chart-spec-info-tip" id="chartSpecKbdInfoTip" role="tooltip">
-                  WSAD pro pohyb
+                  <span class="mdi mdi-magnify chart-zoom-icon" aria-hidden="true"></span>
+                  <span class="chart-zoom-label" id="labelFineSpecZoom">Zoom</span>
+                  <button
+                    type="button"
+                    class="pill-switch"
+                    id="switchFineSpecZoom"
+                    role="switch"
+                    aria-checked="true"
+                    aria-labelledby="labelFineSpecZoom"
+                  >
+                    <span class="pill-switch-thumb" aria-hidden="true"></span>
+                  </button>
+                </div>
+                <div class="chart-spec-info" id="chartSpecKbdInfo">
+                  <button
+                    type="button"
+                    class="chart-spec-info-btn"
+                    id="chartSpecKbdInfoBtn"
+                    aria-describedby="chartSpecKbdInfoTip"
+                    aria-label="Ovládání kurzoru"
+                  >
+                    i
+                  </button>
+                  <div class="chart-spec-info-tip" id="chartSpecKbdInfoTip" role="tooltip">
+                    WSAD pro pohyb
+                  </div>
                 </div>
               </div>
             </div>
@@ -249,7 +260,7 @@
                     id="chartFineSpectrogram"
                     height="384"
                     role="img"
-                    aria-label="High-res FFT 190 až 270 Hz"
+                    aria-label="Spektrogram 190 až 270 Hz"
                   ></canvas>
                 </div>
               </div>
@@ -269,6 +280,7 @@
           </div>
         </div>
         <div class="chart-crosshair" id="chartCrosshair" hidden></div>
+        <div class="chart-crosshair-h" id="chartCrosshairH" hidden></div>
         <div class="chart-spec-pointer" id="chartSpecPointer" hidden aria-hidden="true"></div>
       </section>
     </section>
@@ -423,6 +435,6 @@
     </span>
   </button>
 
-  <script src="/static/app.js?v=75"></script>
+  <script src="/static/app.js?v=76"></script>
 </body>
 </html>

@@ -1040,12 +1040,56 @@ main {
   position: relative;
 }
 
+.chart-pane-title {
+  margin: 0;
+  padding: 0;
+  color: var(--muted);
+  font-family: var(--font-ui);
+  font-size: 0.7rem;
+  font-weight: 500;
+  letter-spacing: 0.03em;
+  line-height: 1.25;
+}
+
+.chart-stack > .chart-pane-title {
+  margin: 0 0 0.3rem;
+}
+
+.chart-laeq-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.75rem;
+  margin: 0 0 0.3rem;
+  min-height: 1.35rem;
+}
+
+.chart-laeq-head > .chart-pane-title {
+  margin: 0;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.chart-laeq-head > .chart-legend {
+  margin: 0;
+  flex-shrink: 0;
+  justify-content: flex-end;
+}
+
 .chart-excess-strip {
   box-sizing: border-box;
   display: flex;
-  align-items: flex-start;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.2rem;
   height: auto;
-  margin: 0.15rem 0 0.15rem;
+  margin: 0.45rem 0 0.15rem;
+  width: 100%;
+}
+
+.chart-excess-body {
+  display: flex;
+  align-items: flex-start;
   width: 100%;
 }
 
@@ -1123,9 +1167,11 @@ main {
 .chart-spec-strip {
   box-sizing: border-box;
   display: flex;
-  align-items: flex-start;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.2rem;
   height: auto;
-  margin: 0;
+  margin: 0.45rem 0 0;
   width: 100%;
 }
 
@@ -1133,19 +1179,35 @@ main {
   display: none;
 }
 
+.chart-spec-body {
+  display: flex;
+  align-items: flex-start;
+  width: 100%;
+}
+
 .chart-fine-spec-strip {
-  margin-top: 0.45rem;
-  flex-direction: column;
-  align-items: stretch;
-  gap: 0.35rem;
+  margin-top: 0.55rem;
+  gap: 0.3rem;
 }
 
 .chart-fine-spec-head {
   display: flex;
-  justify-content: flex-end;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.75rem;
+  min-height: 1.35rem;
+}
+
+.chart-fine-spec-head > .chart-pane-title {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.chart-fine-spec-controls {
+  display: inline-flex;
   align-items: center;
   gap: 0.55rem;
-  min-height: 1.35rem;
+  flex-shrink: 0;
 }
 
 .chart-fine-spec-body {
@@ -1254,10 +1316,11 @@ main {
 }
 
 .chart-spec-y.chart-fine-spec-y.is-fisheye span.is-lens-hot {
-  font-size: 0.62rem; /* stejné jako .chart-spec-y u hlavního spektrogramu */
-  font-weight: 600;
+  font-size: 0.82rem;
+  font-weight: 700;
   color: var(--ink);
   letter-spacing: 0.01em;
+  line-height: 1.05;
 }
 
 .chart-spec-canvas-wrap.chart-fine-spec-canvas-wrap {
@@ -1311,6 +1374,34 @@ main {
 
 .chart-spec-bar.is-hot .chart-spec-bar-val {
   color: var(--warn);
+}
+
+/* Fine spektrum + lupa: dB hodnoty jen v ohnisku, zvětšené. */
+.chart-spec-bars.is-fisheye {
+  justify-content: flex-start;
+}
+
+.chart-spec-bars.is-fisheye .chart-spec-bar {
+  min-height: 0;
+  overflow: hidden;
+}
+
+.chart-spec-bars.is-fisheye .chart-spec-bar.is-lens-hot .chart-spec-bar-val {
+  width: 2.8em;
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.chart-spec-bars.is-fisheye .chart-spec-bar.is-lens-hot .chart-spec-bar-fill {
+  height: 3px;
+}
+
+.chart-spec-bars.is-fisheye .chart-spec-bar.is-lens-dim .chart-spec-bar-val {
+  visibility: hidden;
+}
+
+.chart-spec-bars.is-fisheye .chart-spec-bar.is-lens-dim .chart-spec-bar-track {
+  opacity: 0.22;
 }
 
 .chart-spec-bar-track {
@@ -1400,6 +1491,20 @@ main {
 }
 
 .chart-crosshair[hidden] {
+  display: none;
+}
+
+.chart-crosshair-h {
+  position: absolute;
+  left: 0;
+  height: 0;
+  border-top: 1px solid rgba(232, 240, 236, 0.55);
+  pointer-events: none;
+  z-index: 6;
+  transform: translateY(-0.5px);
+}
+
+.chart-crosshair-h[hidden] {
   display: none;
 }
 
@@ -1580,7 +1685,7 @@ body.spec-kbd-nav * {
   display: flex;
   flex-wrap: wrap;
   gap: 0.85rem 1.35rem;
-  margin: 0 0 0.85rem;
+  margin: 0;
   color: var(--muted);
   font-size: 0.72rem;
   text-transform: uppercase;
@@ -1721,11 +1826,6 @@ body.spec-kbd-nav * {
   border-top: 2.5px solid #ff2d95;
   height: 0;
   margin-top: 0.2rem;
-}
-
-.chart-legend .swatch.excess {
-  background: var(--danger);
-  border-radius: 1px;
 }
 
 .chart-legend .swatch.aircraft {
