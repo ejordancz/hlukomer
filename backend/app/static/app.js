@@ -95,7 +95,6 @@ const PEAK_DILATE_SAMPLES = 1;
 const LS_WINDOW_CORR = "hlk.corr.window";
 const LS_TONAL_CORR = "hlk.corr.tonal";
 const LS_LIMIT_FREQ = "hlk.corr.limitFreq";
-const LS_FINE_SPECTRUM = "hlk.corr.fineSpectrum";
 
 function readLsBool(key, defaultOn = true) {
   try {
@@ -151,6 +150,8 @@ const state = {
   fineSpecTooltipColTs: null,
   /** Index frekvenčního binu pod kurzorem na fine spektrogramu (0 = nejnižší Hz). */
   fineSpecFocusBand: null,
+  /** Index pásma pod kurzorem na 1/3oktávovém spektrogramu (0 = nejnižší Hz). */
+  specFocusBand: null,
   /**
    * WASD navigace nad spektrogramem:
    * skrytý OS kurzor + virtuální bod (clientX/Y), anchorMouse* pro detekci pohybu myši.
@@ -169,8 +170,6 @@ const state = {
     tonalPenalty: readLsBool(LS_TONAL_CORR, false),
     /** Odstranění šumu: dominanta 25/200/250 Hz + filtr přechodných peaků. */
     limitFreqFilter: readLsBool(LS_LIMIT_FREQ, false),
-    /** Jemné spektrum 190–270 Hz (beta, default vypnuto). */
-    fineSpectrum: readLsBool(LS_FINE_SPECTRUM, false),
     windowDb: _displayCfg.windowDb,
     tonalDb: _displayCfg.tonalDb,
   },
@@ -331,7 +330,7 @@ function chartSpecEnabled(hours = currentRangeHours()) {
 }
 
 function fineSpectrumVisible(hours = currentRangeHours()) {
-  return chartSpecEnabled(hours) && !!state.display.fineSpectrum;
+  return chartSpecEnabled(hours);
 }
 
 function fineSpecHeight(nBands) {
@@ -339,11 +338,9 @@ function fineSpecHeight(nBands) {
   return Math.round(CHART_FINE_SPEC_ROW_H * n);
 }
 
-/** Band index (0 = nejnižší Hz) z clientY nad fine canvasem. */
-function fineSpecBandAtClientY(clientY) {
-  const canvas = $("chartFineSpectrogram");
-  const data = state.chartFineSpectrogram;
-  const n = data?.hz?.length || data?.labels?.length || 0;
+/** Band index (0 = nejnižší Hz) z clientY nad spektrogramovým canvasem. */
+function spectrumBandAtClientY(canvas, nBands, clientY) {
+  const n = Number(nBands) || 0;
   if (!canvas || !n) return null;
   const rect = canvas.getBoundingClientRect();
   if (!(rect.height > 0)) return null;
@@ -353,6 +350,21 @@ function fineSpecBandAtClientY(clientY) {
     Math.max(0, Math.floor(((y - rect.top) / rect.height) * n))
   );
   return n - 1 - rowFromTop;
+}
+
+/** Band index (0 = nejnižší Hz) z clientY nad 1/3oktávovým canvasem. */
+function specBandAtClientY(clientY) {
+  const data = state.chartSpectrogram;
+  const n =
+    data?.labels?.length || data?.hz?.length || SPECTRUM_FALLBACK.length;
+  return spectrumBandAtClientY($("chartSpectrogram"), n, clientY);
+}
+
+/** Band index (0 = nejnižší Hz) z clientY nad fine canvasem. */
+function fineSpecBandAtClientY(clientY) {
+  const data = state.chartFineSpectrogram;
+  const n = data?.hz?.length || data?.labels?.length || 0;
+  return spectrumBandAtClientY($("chartFineSpectrogram"), n, clientY);
 }
 
 /** Client Y středu daného 1 Hz binu na fine canvasu. */
@@ -853,11 +865,9 @@ function syncDisplayToggleUi() {
   const sw = $("switchWindow");
   const st = $("switchTonal");
   const sf = $("switchLimitFreq");
-  const sFine = $("switchFineSpectrum");
   if (sw) sw.setAttribute("aria-checked", state.display.windowCorr ? "true" : "false");
   if (st) st.setAttribute("aria-checked", state.display.tonalPenalty ? "true" : "false");
   if (sf) sf.setAttribute("aria-checked", state.display.limitFreqFilter ? "true" : "false");
-  if (sFine) sFine.setAttribute("aria-checked", state.display.fineSpectrum ? "true" : "false");
 
   document.querySelectorAll(".display-toggle").forEach((row) => {
     const kind = row.getAttribute("data-switch");
@@ -865,7 +875,6 @@ function syncDisplayToggleUi() {
     if (kind === "window") on = !!state.display.windowCorr;
     else if (kind === "tonal") on = !!state.display.tonalPenalty;
     else if (kind === "limitFreq") on = !!state.display.limitFreqFilter;
-    else if (kind === "fineSpectrum") on = !!state.display.fineSpectrum;
     row.classList.toggle("is-on", on);
   });
 
@@ -873,8 +882,7 @@ function syncDisplayToggleUi() {
   const anyActive =
     state.display.windowCorr ||
     state.display.tonalPenalty ||
-    state.display.limitFreqFilter ||
-    state.display.fineSpectrum;
+    state.display.limitFreqFilter;
   fab?.classList.toggle("has-active", !!anyActive);
 
   const wDb = state.display.windowDb;
@@ -890,24 +898,18 @@ function syncDisplayToggleUi() {
     "a krátké peaky mimo běžný ambientní hluk. " +
     "V grafu nahradí šumové špičky ambientní spojnicí přes hluchá místa. " +
     "Šedé překročení se do statistiky nad limitem nezapočítá.";
-  const fineTip =
-    "Zobrazí spektrogram 190–270 Hz po 1 Hz (skutečná FFT / DFT). Sloupec ≈ 3 s. Experimentální — vyšší zátěž ESP.";
   const tipW = $("tipWindowCorr");
   const tipT = $("tipTonalCorr");
   const tipF = $("tipLimitFreq");
-  const tipFine = $("tipFineSpectrum");
   const descW = $("descWindowCorr");
   const descT = $("descTonalCorr");
   const descF = $("descLimitFreq");
-  const descFine = $("descFineSpectrum");
   if (tipW) tipW.textContent = windowTip;
   if (descW) descW.textContent = windowTip;
   if (tipT) tipT.textContent = tonalTip;
   if (descT) descT.textContent = tonalTip;
   if (tipF) tipF.textContent = limitFreqTip;
   if (descF) descF.textContent = limitFreqTip;
-  if (tipFine) tipFine.textContent = fineTip;
-  if (descFine) descFine.textContent = fineTip;
 }
 
 function setDisplayToggle(kind, on) {
@@ -920,23 +922,11 @@ function setDisplayToggle(kind, on) {
   } else if (kind === "limitFreq") {
     state.display.limitFreqFilter = !!on;
     writeLsBool(LS_LIMIT_FREQ, state.display.limitFreqFilter);
-  } else if (kind === "fineSpectrum") {
-    state.display.fineSpectrum = !!on;
-    writeLsBool(LS_FINE_SPECTRUM, state.display.fineSpectrum);
+  } else {
+    return;
   }
   syncDisplayToggleUi();
   applyLatestDisplay();
-  if (kind === "fineSpectrum") {
-    syncChartSpecVisibility();
-    if (state.display.fineSpectrum && chartSpecEnabled()) {
-      refreshChartSpectrogram();
-    } else {
-      state.chartFineSpectrogram = null;
-      drawChartFineSpectrogram();
-      applyHistoryDisplay({ refetchSpec: false });
-    }
-    return;
-  }
   // Filtr frekvencí potřebuje spektrogram pro dominantu v historii.
   const needSpec = kind === "limitFreq" && state.display.limitFreqFilter;
   applyHistoryDisplay({ refetchSpec: needSpec });
@@ -1851,6 +1841,7 @@ function hideChartCrosshair() {
   exitSpecKbdNav({ restoreHover: false });
   state.hoverTs = null;
   state.fineSpecFocusBand = null;
+  state.specFocusBand = null;
   const el = $("chartCrosshair");
   if (el) el.hidden = true;
   hideChartHCrosshair();
@@ -2071,8 +2062,16 @@ function applySpecVirtualPointer(clientX, clientY, target) {
 
   const ts = timeFromChartClientXClamped(x);
   if (ts != null) {
-    state.fineSpecFocusBand =
-      hit.target === "fine" ? fineSpecBandAtClientY(y) : null;
+    if (hit.target === "fine") {
+      state.fineSpecFocusBand = fineSpecBandAtClientY(y);
+      state.specFocusBand = null;
+    } else if (hit.target === "main") {
+      state.specFocusBand = specBandAtClientY(y);
+      state.fineSpecFocusBand = null;
+    } else {
+      state.fineSpecFocusBand = null;
+      state.specFocusBand = null;
+    }
     showChartCrosshair(ts);
     showChartHCrosshair(
       { left: hit.rect.left, right: hit.rect.right, top: hit.rect.top, bottom: hit.rect.bottom },
@@ -2233,34 +2232,62 @@ function hideFineSpecCursorReadout() {
   el.textContent = "";
 }
 
-/** U kurzoru na fine spektrogramu: frekvence + dB. */
-function updateFineSpecCursorReadout(tsSec, focusBand) {
+/**
+ * U kurzoru na spektrogramu: frekvence + dB (1/3 oktáva i fine).
+ * @returns {boolean} true pokud je readout vidět
+ */
+function updateSpecPointerReadout(tsSec) {
   const el = $("chartSpecPointerReadout");
-  if (!el) return;
-  if (focusBand == null || !fineSpectrumVisible()) {
+  if (!el) return false;
+
+  let data = null;
+  let focusBand = null;
+  let maxDistSec = null;
+  let label = null;
+
+  if (state.fineSpecFocusBand != null && fineSpectrumVisible()) {
+    data = state.chartFineSpectrogram;
+    focusBand = state.fineSpecFocusBand;
+    maxDistSec = FINE_SPEC_HOVER_MAX_DIST_S;
+    const n = data?.hz?.length || 0;
+    if (!data || focusBand < 0 || focusBand >= n) {
+      hideFineSpecCursorReadout();
+      return false;
+    }
+    const hz = Number(data.hz[focusBand]);
+    label = Number.isFinite(hz) ? `${Math.round(hz)} Hz` : "—";
+  } else if (state.specFocusBand != null && chartSpecEnabled()) {
+    data = state.chartSpectrogram;
+    focusBand = state.specFocusBand;
+    const n = data?.labels?.length || data?.hz?.length || 0;
+    if (!data || focusBand < 0 || focusBand >= n) {
+      hideFineSpecCursorReadout();
+      return false;
+    }
+    label =
+      data.labels?.[focusBand] ||
+      SPECTRUM_FALLBACK[focusBand] ||
+      (Number.isFinite(Number(data.hz?.[focusBand]))
+        ? `${Math.round(Number(data.hz[focusBand]))} Hz`
+        : "—");
+  } else {
     hideFineSpecCursorReadout();
-    return;
+    return false;
   }
-  const data = state.chartFineSpectrogram;
-  const n = data?.hz?.length || 0;
-  if (!data || focusBand < 0 || focusBand >= n) {
-    hideFineSpecCursorReadout();
-    return;
-  }
-  const col = nearestSpecColumnFrom(data, tsSec, FINE_SPEC_HOVER_MAX_DIST_S);
+
+  const col = nearestSpecColumnFrom(data, tsSec, maxDistSec);
   if (!col?.v?.length) {
     hideFineSpecCursorReadout();
-    return;
+    return false;
   }
-  const hz = Number(data.hz[focusBand]);
   const raw = col.v[focusBand];
   const v =
     raw == null || Number.isNaN(Number(raw)) ? null : Number(raw) - windowOffset();
-  const hzTxt = Number.isFinite(hz) ? `${Math.round(hz)} Hz` : "—";
   const dbTxt = v == null || Number.isNaN(v) ? "—.—" : fmtDb(v);
-  el.textContent = `${hzTxt} · ${dbTxt} dB`;
+  el.textContent = `${label} · ${dbTxt} dB`;
   el.hidden = false;
-  state.fineSpecTooltipColTs = col.t;
+  if (state.fineSpecFocusBand != null) state.fineSpecTooltipColTs = col.t;
+  return true;
 }
 
 /** Spektrum u crosshairu — dB + linky vlevo přes spektrogram, vedle Y stupnice. */
@@ -2289,12 +2316,7 @@ function showSpecTooltip(tsSec, _lineLeft) {
     }
   }
 
-  if (state.fineSpecFocusBand != null) {
-    updateFineSpecCursorReadout(tsSec, state.fineSpecFocusBand);
-    any = true;
-  } else {
-    hideFineSpecCursorReadout();
-  }
+  if (updateSpecPointerReadout(tsSec)) any = true;
 
   if (!any) hideSpecTooltip();
 }
@@ -2649,28 +2671,21 @@ async function refreshChartSpectrogram() {
   if (state.chartPanning) return;
   const { hours, start } = selectedHistoryRange();
   const reqId = ++state.chartSpecReqId;
-  const wantFine = !!state.display.fineSpectrum;
-  const fineReqId = wantFine ? ++state.chartFineSpecReqId : state.chartFineSpecReqId;
+  const fineReqId = ++state.chartFineSpecReqId;
   try {
     let url = `/api/v1/spectrum/history?hours=${encodeURIComponent(hours)}&max_columns=480`;
     if (start != null) url += `&start=${encodeURIComponent(start)}`;
-    const finePromise = wantFine
-      ? (() => {
-          let fineUrl = `/api/v1/spectrum/fine/history?hours=${encodeURIComponent(hours)}&max_columns=480`;
-          if (start != null) fineUrl += `&start=${encodeURIComponent(start)}`;
-          return fetchJson(fineUrl).catch((err) => {
-            console.error(err);
-            return null;
-          });
-        })()
-      : Promise.resolve(null);
+    let fineUrl = `/api/v1/spectrum/fine/history?hours=${encodeURIComponent(hours)}&max_columns=480`;
+    if (start != null) fineUrl += `&start=${encodeURIComponent(start)}`;
+    const finePromise = fetchJson(fineUrl).catch((err) => {
+      console.error(err);
+      return null;
+    });
     const [data, fineData] = await Promise.all([fetchJson(url), finePromise]);
     if (reqId !== state.chartSpecReqId) return;
     state.chartSpectrogram = data;
-    if (wantFine && fineReqId === state.chartFineSpecReqId) {
+    if (fineReqId === state.chartFineSpecReqId) {
       state.chartFineSpectrogram = fineData;
-    } else if (!wantFine) {
-      state.chartFineSpectrogram = null;
     }
     state.specTooltipColTs = null;
     state.fineSpecTooltipColTs = null;
@@ -3013,8 +3028,13 @@ function bindChartCrosshair() {
 
     if (plot?.id === "fine") {
       state.fineSpecFocusBand = fineSpecBandAtClientY(plot.clientY);
-    } else if (state.fineSpecFocusBand != null) {
+      state.specFocusBand = null;
+    } else if (plot?.id === "main") {
+      state.specFocusBand = specBandAtClientY(plot.clientY);
       state.fineSpecFocusBand = null;
+    } else {
+      if (state.fineSpecFocusBand != null) state.fineSpecFocusBand = null;
+      if (state.specFocusBand != null) state.specFocusBand = null;
     }
 
     showChartCrosshair(ts);
@@ -3113,7 +3133,6 @@ function bind() {
   });
 
   bindDisplayToggles();
-  bindChartSpecKbdInfo();
   bindSettingsPanel();
 
   const aircraftRow = $("aircraftTimeline");
@@ -3221,26 +3240,6 @@ function bindSettingsPanel() {
     if (ev.key !== "Escape" || !isSettingsOpen()) return;
     setSettingsOpen(false);
     fab.focus();
-  });
-}
-
-/** Info „i“ u fine spektrogramu — jen tip, ne přepínač. */
-function bindChartSpecKbdInfo() {
-  const wrap = $("chartSpecKbdInfo");
-  const btn = $("chartSpecKbdInfoBtn");
-  if (!wrap || !btn) return;
-  btn.addEventListener("click", (ev) => {
-    ev.preventDefault();
-    ev.stopPropagation();
-    wrap.classList.toggle("is-open");
-  });
-  document.addEventListener("click", (ev) => {
-    if (!wrap.classList.contains("is-open")) return;
-    if (wrap.contains(ev.target)) return;
-    wrap.classList.remove("is-open");
-  });
-  document.addEventListener("keydown", (ev) => {
-    if (ev.key === "Escape") wrap.classList.remove("is-open");
   });
 }
 
