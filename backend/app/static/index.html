@@ -9,7 +9,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,700&family=IBM+Plex+Mono:wght@400;500&family=Sora:wght@400;500;600&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/static/style.css?v=77" />
+  <link rel="stylesheet" href="/static/style.css?v=80" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@mdi/font@7.4.47/css/materialdesignicons.min.css" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.9/dist/chart.umd.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
@@ -206,17 +206,52 @@
             </div>
           </div>
           <div class="chart-spec-strip chart-fine-spec-strip" id="chartFineSpecStrip" hidden>
-            <div class="chart-spec-y chart-fine-spec-y" id="chartFineSpecYLabels" aria-hidden="true"></div>
-            <div class="chart-spec-plot">
-              <div class="chart-spec-unit chart-fine-spec-unit" aria-hidden="true">dB</div>
-              <div class="chart-spec-canvas-wrap chart-fine-spec-canvas-wrap" id="chartFineSpecCanvasWrap">
-                <div class="chart-spec-bars" id="chartFineSpecBars" hidden aria-hidden="true"></div>
-                <canvas
-                  id="chartFineSpectrogram"
-                  height="384"
-                  role="img"
-                  aria-label="High-res FFT 190 až 270 Hz"
-                ></canvas>
+            <div class="chart-fine-spec-head">
+              <div
+                class="chart-zoom-toggle"
+                title="Přiblížení frekvencí u kurzoru"
+              >
+                <span class="mdi mdi-magnify chart-zoom-icon" aria-hidden="true"></span>
+                <span class="chart-zoom-label" id="labelFineSpecZoom">Zoom</span>
+                <button
+                  type="button"
+                  class="pill-switch"
+                  id="switchFineSpecZoom"
+                  role="switch"
+                  aria-checked="true"
+                  aria-labelledby="labelFineSpecZoom"
+                >
+                  <span class="pill-switch-thumb" aria-hidden="true"></span>
+                </button>
+              </div>
+              <div class="chart-spec-info" id="chartSpecKbdInfo">
+                <button
+                  type="button"
+                  class="chart-spec-info-btn"
+                  id="chartSpecKbdInfoBtn"
+                  aria-describedby="chartSpecKbdInfoTip"
+                  aria-label="Ovládání kurzoru"
+                >
+                  i
+                </button>
+                <div class="chart-spec-info-tip" id="chartSpecKbdInfoTip" role="tooltip">
+                  WSAD pro pohyb
+                </div>
+              </div>
+            </div>
+            <div class="chart-fine-spec-body">
+              <div class="chart-spec-y chart-fine-spec-y" id="chartFineSpecYLabels" aria-hidden="true"></div>
+              <div class="chart-spec-plot">
+                <div class="chart-spec-unit chart-fine-spec-unit" aria-hidden="true">dB</div>
+                <div class="chart-spec-canvas-wrap chart-fine-spec-canvas-wrap" id="chartFineSpecCanvasWrap">
+                  <div class="chart-spec-bars" id="chartFineSpecBars" hidden aria-hidden="true"></div>
+                  <canvas
+                    id="chartFineSpectrogram"
+                    height="384"
+                    role="img"
+                    aria-label="High-res FFT 190 až 270 Hz"
+                  ></canvas>
+                </div>
               </div>
             </div>
           </div>
@@ -388,6 +423,6 @@
     </span>
   </button>
 
-  <script src="/static/app.js?v=72"></script>
+  <script src="/static/app.js?v=75"></script>
 </body>
 </html>

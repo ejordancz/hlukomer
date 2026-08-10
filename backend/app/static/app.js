@@ -98,6 +98,7 @@ const LS_WINDOW_CORR = "hlk.corr.window";
 const LS_TONAL_CORR = "hlk.corr.tonal";
 const LS_LIMIT_FREQ = "hlk.corr.limitFreq";
 const LS_FINE_SPECTRUM = "hlk.corr.fineSpectrum";
+const LS_FINE_SPEC_ZOOM = "hlk.corr.fineSpecZoom";
 
 function readLsBool(key, defaultOn = true) {
   try {
@@ -176,6 +177,8 @@ const state = {
     limitFreqFilter: readLsBool(LS_LIMIT_FREQ, false),
     /** Jemné spektrum 190–270 Hz (beta, default vypnuto). */
     fineSpectrum: readLsBool(LS_FINE_SPECTRUM, false),
+    /** Fisheye lupa na High-res FFT (default zapnuto). */
+    fineSpecZoom: readLsBool(LS_FINE_SPEC_ZOOM, true),
     windowDb: _displayCfg.windowDb,
     tonalDb: _displayCfg.tonalDb,
   },
@@ -826,6 +829,11 @@ function syncDisplayToggleUi() {
   if (sf) sf.setAttribute("aria-checked", state.display.limitFreqFilter ? "true" : "false");
   if (sFine) sFine.setAttribute("aria-checked", state.display.fineSpectrum ? "true" : "false");
 
+  const sZoom = $("switchFineSpecZoom");
+  const zoomOn = !!state.display.fineSpecZoom;
+  if (sZoom) sZoom.setAttribute("aria-checked", zoomOn ? "true" : "false");
+  document.querySelector(".chart-zoom-toggle")?.classList.toggle("is-on", zoomOn);
+
   document.querySelectorAll(".display-toggle").forEach((row) => {
     const kind = row.getAttribute("data-switch");
     let on = false;
@@ -890,6 +898,13 @@ function setDisplayToggle(kind, on) {
   } else if (kind === "fineSpectrum") {
     state.display.fineSpectrum = !!on;
     writeLsBool(LS_FINE_SPECTRUM, state.display.fineSpectrum);
+  } else if (kind === "fineSpecZoom") {
+    state.display.fineSpecZoom = !!on;
+    writeLsBool(LS_FINE_SPEC_ZOOM, state.display.fineSpecZoom);
+    syncDisplayToggleUi();
+    if (!state.display.fineSpecZoom) clearFineLens();
+    else drawChartFineSpectrogram();
+    return;
   }
   syncDisplayToggleUi();
   applyLatestDisplay();
@@ -899,6 +914,7 @@ function setDisplayToggle(kind, on) {
       refreshChartSpectrogram();
     } else {
       state.chartFineSpectrogram = null;
+      clearFineLens();
       drawChartFineSpectrogram();
       applyHistoryDisplay({ refetchSpec: false });
     }
@@ -1951,7 +1967,6 @@ function moveSpecKbdNav(dx, dy) {
 function bindSpecKeyboardNav() {
   document.addEventListener("keydown", (ev) => {
     if (ev.ctrlKey || ev.metaKey || ev.altKey) return;
-    if (isTypingTarget(ev.target)) return;
 
     const key = ev.key.length === 1 ? ev.key.toLowerCase() : ev.key;
     let dx = 0;
@@ -1962,8 +1977,22 @@ function bindSpecKeyboardNav() {
     else if (key === "s" || key === "ArrowDown") dy = SPEC_KBD_STEP_PX;
     else return;
 
+    // Po změně rozsahu zůstává focus na <select> — šipky by měnily option
+    // místo pohybu bodu. Nad spektrogramem (nebo v aktivní navigaci) přebíráme
+    // klávesy i z selectu; INPUT/TEXTAREA necháme na psaní.
+    const typing = isTypingTarget(ev.target);
+    const overSpec = !!(state.specKbdNav?.active || state.specPointerLast);
+    if (typing) {
+      const tag = ev.target?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || ev.target?.isContentEditable) {
+        return;
+      }
+      if (tag === "SELECT" && !overSpec) return;
+    }
+
     if (state.specKbdNav?.active) {
       ev.preventDefault();
+      if (ev.target?.tagName === "SELECT") ev.target.blur();
       moveSpecKbdNav(dx, dy);
       return;
     }
@@ -1974,6 +2003,7 @@ function bindSpecKeyboardNav() {
     if (!hit) return;
 
     ev.preventDefault();
+    if (ev.target?.tagName === "SELECT") ev.target.blur();
     enterSpecKbdNav(
       last.clientX,
       last.clientY,
@@ -2199,7 +2229,15 @@ function fisheyeBandLayout(nBands, height, focusNorm, strength, radius) {
   return { edges, weights };
 }
 
+function fineSpecZoomEnabled() {
+  return !!state.display.fineSpecZoom;
+}
+
 function scheduleFineLens(norm) {
+  if (!fineSpecZoomEnabled()) {
+    if (state.fineSpecLensNorm != null) clearFineLens();
+    return;
+  }
   const next =
     norm == null || !Number.isFinite(norm)
       ? null
@@ -2444,7 +2482,7 @@ function drawChartFineSpectrogram() {
     data: state.chartFineSpectrogram,
     emptyText: "High-res FFT…",
     yLabelFn: fineSpecYLabel,
-    fisheye: true,
+    fisheye: fineSpecZoomEnabled(),
   });
 }
 
@@ -3009,6 +3047,8 @@ function bind() {
   });
 
   bindDisplayToggles();
+  bindFineSpecZoomToggle();
+  bindChartSpecKbdInfo();
   bindSettingsPanel();
 
   const aircraftRow = $("aircraftTimeline");
@@ -3113,6 +3153,44 @@ function bindSettingsPanel() {
     if (ev.key !== "Escape" || !isSettingsOpen()) return;
     setSettingsOpen(false);
     fab.focus();
+  });
+}
+
+function bindFineSpecZoomToggle() {
+  const btn = $("switchFineSpecZoom");
+  if (!btn) return;
+  const toggle = () => {
+    const next = btn.getAttribute("aria-checked") !== "true";
+    setDisplayToggle("fineSpecZoom", next);
+  };
+  btn.addEventListener("click", (ev) => {
+    ev.preventDefault();
+    toggle();
+  });
+  btn.addEventListener("keydown", (ev) => {
+    if (ev.key !== " " && ev.key !== "Enter") return;
+    ev.preventDefault();
+    toggle();
+  });
+}
+
+/** Info „i“ u fine spektrogramu — jen tip, ne přepínač. */
+function bindChartSpecKbdInfo() {
+  const wrap = $("chartSpecKbdInfo");
+  const btn = $("chartSpecKbdInfoBtn");
+  if (!wrap || !btn) return;
+  btn.addEventListener("click", (ev) => {
+    ev.preventDefault();
+    ev.stopPropagation();
+    wrap.classList.toggle("is-open");
+  });
+  document.addEventListener("click", (ev) => {
+    if (!wrap.classList.contains("is-open")) return;
+    if (wrap.contains(ev.target)) return;
+    wrap.classList.remove("is-open");
+  });
+  document.addEventListener("keydown", (ev) => {
+    if (ev.key === "Escape") wrap.classList.remove("is-open");
   });
 }
 

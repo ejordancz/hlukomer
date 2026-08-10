@@ -1135,6 +1135,23 @@ main {
 
 .chart-fine-spec-strip {
   margin-top: 0.45rem;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.35rem;
+}
+
+.chart-fine-spec-head {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 0.55rem;
+  min-height: 1.35rem;
+}
+
+.chart-fine-spec-body {
+  display: flex;
+  align-items: flex-start;
+  width: 100%;
 }
 
 .chart-spec-unavailable {
@@ -1568,6 +1585,112 @@ body.spec-kbd-nav * {
   font-size: 0.72rem;
   text-transform: uppercase;
   letter-spacing: 0.06em;
+}
+
+.chart-zoom-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  color: var(--muted);
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  user-select: none;
+}
+
+.chart-zoom-toggle .pill-switch {
+  width: 2.2rem;
+  height: 1.2rem;
+}
+
+.chart-zoom-toggle .pill-switch-thumb {
+  width: 0.92rem;
+  height: 0.92rem;
+  left: calc(100% - 1.02rem);
+}
+
+.chart-zoom-toggle .pill-switch[aria-checked="false"] .pill-switch-thumb {
+  left: 0.1rem;
+}
+
+.chart-zoom-icon {
+  font-size: 1rem;
+  line-height: 1;
+  opacity: 0.85;
+}
+
+.chart-zoom-toggle.is-on {
+  color: var(--ink);
+}
+
+.chart-zoom-toggle.is-on .chart-zoom-icon {
+  color: var(--accent);
+  opacity: 1;
+}
+
+.chart-spec-info {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.chart-spec-info-btn {
+  appearance: none;
+  box-sizing: border-box;
+  width: 1.15rem;
+  height: 1.15rem;
+  margin: 0;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: #4a90d9;
+  color: #fff;
+  font-family: var(--font-ui);
+  font-size: 0.68rem;
+  font-weight: 700;
+  font-style: italic;
+  line-height: 1;
+  cursor: help;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.chart-spec-info-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.chart-spec-info-tip {
+  position: absolute;
+  top: calc(100% + 0.4rem);
+  right: 0;
+  z-index: 40;
+  width: max-content;
+  max-width: 14rem;
+  padding: 0.5rem 0.65rem;
+  border-radius: 0.4rem;
+  background: rgba(12, 18, 22, 0.96);
+  border: 1px solid rgba(74, 144, 217, 0.45);
+  color: #d7e2dc;
+  font-size: 0.72rem;
+  font-weight: 400;
+  letter-spacing: 0;
+  text-transform: none;
+  line-height: 1.35;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity 0.15s ease, visibility 0.15s ease;
+}
+
+.chart-spec-info:hover .chart-spec-info-tip,
+.chart-spec-info.is-open .chart-spec-info-tip,
+.chart-spec-info:focus-within .chart-spec-info-tip {
+  opacity: 1;
+  visibility: visible;
 }
 
 .chart-legend-item {
