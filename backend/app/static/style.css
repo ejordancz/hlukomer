@@ -1137,11 +1137,6 @@ main {
   margin-top: 0.45rem;
 }
 
-.chart-fine-spec-y {
-  height: 22.5rem; /* = CHART_FINE_SPEC_HEIGHT 360px */
-  font-size: 0.55rem;
-}
-
 .chart-spec-unavailable {
   box-sizing: border-box;
   display: flex;
@@ -1221,6 +1216,35 @@ main {
   border-radius: 0.25rem;
   overflow: hidden;
   background: #0a1010;
+}
+
+/* Musí být AŽ za .chart-spec-* — stejný element má obě třídy. */
+.chart-spec-y.chart-fine-spec-y {
+  height: 24rem; /* = CHART_FINE_SPEC_HEIGHT 384px */
+  font-size: 0.55rem;
+}
+
+.chart-spec-y.chart-fine-spec-y.is-fisheye {
+  justify-content: flex-start;
+}
+
+.chart-spec-y.chart-fine-spec-y.is-fisheye span {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.chart-spec-y.chart-fine-spec-y.is-fisheye span.is-lens-hot {
+  font-size: 0.62rem; /* stejné jako .chart-spec-y u hlavního spektrogramu */
+  font-weight: 600;
+  color: var(--ink);
+  letter-spacing: 0.01em;
+}
+
+.chart-spec-canvas-wrap.chart-fine-spec-canvas-wrap {
+  height: 24rem;
 }
 
 .chart-spec-bars {
@@ -1318,6 +1342,10 @@ main {
   user-select: none;
 }
 
+.chart-spec-canvas-wrap.chart-fine-spec-canvas-wrap canvas {
+  height: 24rem;
+}
+
 .chart-spec-canvas-wrap canvas.is-dragging {
   cursor: grabbing;
 }
@@ -1356,6 +1384,140 @@ main {
 
 .chart-crosshair[hidden] {
   display: none;
+}
+
+.chart-hover-panel {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 45;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 0.65rem 1.35rem;
+  padding: 0.55rem 1.1rem;
+  padding-right: calc(var(--fab-size) + 1.5rem);
+  pointer-events: none;
+  color: var(--ink);
+  font-family: var(--font-ui);
+  background:
+    linear-gradient(180deg, rgba(10, 16, 14, 0.94), rgba(12, 20, 18, 0.88));
+  border-bottom: 1px solid rgba(232, 240, 236, 0.14);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.35);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+
+.chart-hover-panel[hidden] {
+  display: none !important;
+}
+
+.chart-hover-item {
+  display: grid;
+  grid-template-columns: 1.1rem var(--hover-val-w, 5ch) max-content;
+  align-items: center;
+  column-gap: 0.35rem;
+  white-space: nowrap;
+}
+
+.chart-hover-level {
+  --hover-val-w: 5ch;
+}
+
+.chart-hover-time {
+  --hover-val-w: 16ch;
+  grid-template-columns: 1.1rem var(--hover-val-w);
+}
+
+.chart-hover-limit {
+  --hover-val-w: 5ch;
+}
+
+.chart-hover-limit.is-tonal .chart-hover-unit::after {
+  content: " · tón";
+}
+
+.chart-hover-excess {
+  --hover-val-w: 6ch;
+}
+
+.chart-hover-icon {
+  width: 1.1rem;
+  text-align: center;
+  font-size: 1.05rem;
+  line-height: 1;
+  color: var(--muted);
+}
+
+.chart-hover-icon-limit {
+  color: #ff2d95;
+}
+
+.chart-hover-val {
+  display: block;
+  width: var(--hover-val-w, 5ch);
+  overflow: hidden;
+  text-align: right;
+  font-family: var(--font-mono);
+  font-size: 0.95rem;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum";
+  letter-spacing: 0;
+  line-height: 1.2;
+}
+
+.chart-hover-time .chart-hover-val {
+  font-size: 0.88rem;
+}
+
+.chart-hover-unit {
+  color: var(--muted);
+  font-size: 0.72rem;
+  letter-spacing: 0.02em;
+  line-height: 1.2;
+}
+
+.chart-hover-val.is-over {
+  color: var(--danger);
+}
+
+.chart-hover-val.is-under {
+  color: var(--chart);
+}
+
+.chart-hover-val.is-uneval {
+  color: var(--muted-dim);
+}
+
+.chart-hover-item.is-uneval .chart-hover-icon {
+  color: var(--muted-dim);
+}
+
+@media (max-width: 700px) {
+  .chart-hover-panel {
+    justify-content: flex-start;
+    gap: 0.45rem 0.95rem;
+    padding: 0.5rem 0.75rem;
+    padding-right: calc(var(--fab-size) + 1rem);
+    overflow-x: auto;
+    flex-wrap: nowrap;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .chart-hover-val {
+    font-size: 0.88rem;
+  }
+
+  .chart-hover-time .chart-hover-val {
+    font-size: 0.8rem;
+  }
+
+  .chart-hover-unit {
+    font-size: 0.68rem;
+  }
 }
 
 .chart-stack.has-spec #chart {

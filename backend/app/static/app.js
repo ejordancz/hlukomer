@@ -54,8 +54,12 @@ const LF_BANDS = new Set([
 ]);
 
 const CHART_SPEC_HEIGHT = 288;
-/** High-res FFT 190–270 Hz — vyšší strip kvůli 81 binům. */
-const CHART_FINE_SPEC_HEIGHT = 360;
+/** High-res FFT 190–270 Hz — 81 binů; fisheye lupa doplní detail. */
+const CHART_FINE_SPEC_HEIGHT = 384;
+/** Fisheye lupa na ose Y (násobek výšky řádku u kurzoru). */
+const FINE_LENS_STRENGTH = 8.5;
+/** Poloměr lupty jako podíl výšky stripu (užší = méně řádků). */
+const FINE_LENS_RADIUS = 0.095;
 /** Výška grafu překročení limitu (~1/4 spektrogramu). */
 const CHART_EXCESS_HEIGHT = Math.round(CHART_SPEC_HEIGHT / 4);
 /** Barva sloupců překročení + čtvereček v tooltipu. */
@@ -142,11 +146,16 @@ const state = {
   chartSpectrogram: null,
   chartFineSpectrogram: null,
   hoverTs: null,
-  /** Klíč aktivních bodů Chart.js tooltipu (méně update při mousemove). */
-  chartTooltipKey: null,
+  /** Poslední klíč hodnot v horním hover panelu (méně DOM update). */
+  chartHoverKey: null,
   /** Čas sloupce spektrogramu u Y stupnice (méně překreslení). */
   specTooltipColTs: null,
   fineSpecTooltipColTs: null,
+  /** Fisheye fokus na fine spektrogramu (0 = nahoře, 1 = dole), null = vypnuto. */
+  fineSpecLensNorm: null,
+  fineSpecLensRaf: 0,
+  /** Váhy řádků (shora dolů) z posledního vykreslení fine heatmapy. */
+  fineSpecRowWeights: null,
   /** Hlavní graf: true = okno končí „teď“, start se posouvá s časem. */
   chartLive: true,
   /** Pevný začátek okna grafu (unix s), když chartLive=false. */
@@ -1028,7 +1037,7 @@ function applyHistoryDisplay({ refetchSpec = true } = {}) {
     // Monotone bez overshootu — mosty přes hluchá místa neudělají „zuby“.
     dbaDs.cubicInterpolationMode = filterOn ? "monotone" : "default";
   }
-  // Neviditelná řada jen pro čtvereček v tooltipu (stejná barva jako mezigraf).
+  // Neviditelná řada — data pro sloupcový graf překročení / hover panel.
   // Drží vždy surová naměřená data — i pro sloupcový graf překročení.
   if (excessDs) excessDs.data = measuredData;
   if (limitDs) {
@@ -1037,7 +1046,7 @@ function applyHistoryDisplay({ refetchSpec = true } = {}) {
       y: effectiveLimit(p.v),
     }));
   }
-  state.chartTooltipKey = null;
+  state.chartHoverKey = null;
 
   const range = selectedHistoryRange();
   if (state.chartLive && data.start != null) {
@@ -1427,7 +1436,7 @@ function initChart() {
           stepped: "before",
         },
         {
-          // Jen pro tooltip — čtvereček ve barvě mezigrafu u „od limitu“.
+          // Neviditelná řada — data pro sloupcový graf překročení / hover panel.
           label: "excess",
           data: [],
           borderColor: CHART_EXCESS_COLOR,
@@ -1480,37 +1489,8 @@ function initChart() {
       },
       plugins: {
         legend: { display: false },
-        tooltip: {
-          callbacks: {
-            title: (items) => {
-              const ts = items[0]?.parsed?.x;
-              if (ts == null) return "";
-              return fmtTime(ts / 1000);
-            },
-            label: (ctx) => {
-              if (ctx.dataset.label === "limit") {
-                // Čas bereme z naměřeného bodu — sparse limit + index-mode jinak lže.
-                const pts = ctx.chart.tooltip?.dataPoints || [];
-                const measured = pts.find((i) => i.dataset.label === "dBA");
-                const tMs = measured?.parsed?.x ?? ctx.parsed.x;
-                const lim = chartLimitYAt(tMs);
-                if (lim == null || Number.isNaN(Number(lim))) return null;
-                const tonal = state.display.tonalPenalty ? " (tón)" : "";
-                return `limit ${Number(lim).toFixed(1)} dBA${tonal}`;
-              }
-              if (ctx.dataset.label === "excess") {
-                if (ctx.parsed.y == null || Number.isNaN(ctx.parsed.y)) return null;
-                const lim = chartLimitYAt(ctx.parsed.x);
-                if (lim == null || Number.isNaN(Number(lim))) return null;
-                const delta = ctx.parsed.y - Number(lim);
-                const sign = delta >= 0 ? "+" : "−";
-                return `${sign}${Math.abs(delta).toFixed(1)} dBA od limitu`;
-              }
-              if (ctx.parsed.y == null || Number.isNaN(ctx.parsed.y)) return null;
-              return `${ctx.parsed.y.toFixed(1)} dBA`;
-            },
-          },
-        },
+        // Hodnoty u kurzoru jdou do #chartHoverPanel (fixed nahoře).
+        tooltip: { enabled: false },
       },
     },
   });
@@ -1740,64 +1720,100 @@ function layoutChartSpecStrip() {
   }
 }
 
-function hideChartTooltip() {
-  const chart = state.chart;
-  state.chartTooltipKey = null;
-  if (!chart?.tooltip) return;
-  chart.setActiveElements([]);
-  chart.tooltip.setActiveElements([], { x: 0, y: 0 });
-  chart.update("none");
+function nearestMeasuredAt(tsSec) {
+  const ds = chartDatasetByLabel("dBA")?.data;
+  if (!ds?.length) return null;
+  const targetMs = tsSec * 1000;
+  let best = null;
+  let bestDist = Infinity;
+  for (const p of ds) {
+    if (p?.y == null || Number.isNaN(Number(p.y))) continue;
+    const d = Math.abs(p.x - targetMs);
+    if (d < bestDist) {
+      bestDist = d;
+      best = p;
+    }
+  }
+  return best;
 }
 
-/** Nejbližší body datasetů k času → stejný tooltip jako při hoveru grafu. */
-function showChartTooltipAt(tsSec) {
-  const chart = state.chart;
-  if (!chart?.tooltip) return;
-  const targetMs = tsSec * 1000;
-  const active = [];
-  let anchor = null;
-  for (let di = 0; di < chart.data.datasets.length; di++) {
-    const ds = chart.data.datasets[di].data;
-    if (!ds?.length) continue;
-    let best;
-    // Limit je schodová řada: platí poslední bod s časem ≤ kurzoru (ne nejbližší).
-    if (chart.data.datasets[di].label === "limit") {
-      best = steppedIndexAt(ds, targetMs);
+function hideChartHoverPanel() {
+  state.chartHoverKey = null;
+  const panel = $("chartHoverPanel");
+  if (panel) panel.hidden = true;
+}
+
+/** Horní fixed panel: hladina, čas, limit, odchylka — u všech historických grafů. */
+function showChartHoverPanel(tsSec) {
+  const panel = $("chartHoverPanel");
+  if (!panel) return;
+
+  const measured = nearestMeasuredAt(tsSec);
+  const tMs = measured?.x ?? tsSec * 1000;
+  const level = measured?.y;
+  const lim = chartLimitYAt(tMs);
+  const tSec = tMs / 1000;
+  const evaluate =
+    level != null && lim != null ? shouldEvaluateLimitAt(tSec) : true;
+  const peak = !evaluate && isTransientPeakAt(tSec);
+  const tonal = !!state.display.tonalPenalty;
+
+  let excessText = "—.—";
+  let excessClass = "";
+  let excessTitle = "Odchylka od limitu";
+  if (level != null && lim != null && !Number.isNaN(Number(level)) && !Number.isNaN(Number(lim))) {
+    if (!evaluate) {
+      excessText = "—.—";
+      excessClass = "is-uneval";
+      excessTitle = limitSkipLabel({ peak });
     } else {
-      best = 0;
-      let bestDist = Infinity;
-      for (let i = 0; i < ds.length; i++) {
-        const d = Math.abs(ds[i].x - targetMs);
-        if (d < bestDist) {
-          bestDist = d;
-          best = i;
-        }
-      }
+      const delta = Number(level) - Number(lim);
+      const sign = delta >= 0 ? "+" : "−";
+      excessText = `${sign}${Math.abs(delta).toFixed(1)}`;
+      excessClass = delta >= 0 ? "is-over" : "is-under";
+      excessTitle = delta >= 0 ? "Nad limitem" : "Pod limitem";
     }
-    if (best < 0) continue;
-    const meta = chart.getDatasetMeta(di);
-    if (meta.hidden || !meta.data[best]) continue;
-    active.push({ datasetIndex: di, index: best });
-    if (di === 0) anchor = meta.data[best];
   }
-  if (!active.length || !anchor) {
-    hideChartTooltip();
-    return;
+
+  const levelText =
+    level != null && !Number.isNaN(Number(level)) ? Number(level).toFixed(1) : "—.—";
+  const limitText =
+    lim != null && !Number.isNaN(Number(lim)) ? Number(lim).toFixed(1) : "—.—";
+  const timeText = fmtTime(tSec);
+  const key = `${levelText}|${timeText}|${limitText}|${tonal}|${excessText}|${excessClass}|${excessTitle}`;
+  if (state.chartHoverKey === key && !panel.hidden) return;
+  state.chartHoverKey = key;
+
+  const levelEl = $("hoverLevel");
+  const timeEl = $("hoverTime");
+  const limitEl = $("hoverLimit");
+  const limitItem = $("hoverLimitItem");
+  const excessEl = $("hoverExcess");
+  const excessItem = $("hoverExcessItem");
+  if (levelEl) levelEl.textContent = levelText;
+  if (timeEl) timeEl.textContent = timeText;
+  if (limitEl) limitEl.textContent = limitText;
+  limitItem?.classList.toggle("is-tonal", tonal);
+  if (limitItem) {
+    limitItem.title = tonal ? "Hygienický limit (tónová korekce)" : "Hygienický limit";
   }
-  const key = active.map((a) => `${a.datasetIndex}:${a.index}`).join("|");
-  if (state.chartTooltipKey === key) return;
-  state.chartTooltipKey = key;
-  chart.setActiveElements(active);
-  chart.tooltip.setActiveElements(active, { x: anchor.x, y: anchor.y });
-  chart.update("none");
+  if (excessEl) {
+    excessEl.textContent = excessText;
+    excessEl.classList.remove("is-over", "is-under", "is-uneval");
+    if (excessClass) excessEl.classList.add(excessClass);
+  }
+  excessItem?.classList.toggle("is-uneval", excessClass === "is-uneval");
+  if (excessItem) excessItem.title = excessTitle;
+  panel.hidden = false;
 }
 
 function hideChartCrosshair() {
   state.hoverTs = null;
   const el = $("chartCrosshair");
   if (el) el.hidden = true;
-  hideChartTooltip();
+  hideChartHoverPanel();
   hideSpecTooltip();
+  clearFineLens();
 }
 
 function nearestSpecColumnFrom(data, tsSec, maxDistSec) {
@@ -1837,37 +1853,6 @@ function hideSpecTooltip() {
       bars.innerHTML = "";
     }
   }
-}
-
-function fillSpecBars(barsEl, col, labels, bandIds, lfBands) {
-  const off = windowOffset();
-  const bands = col.v.map((v, i) => ({
-    band: bandIds?.[i] || "",
-    label: labels[i] || "",
-    value: v == null || Number.isNaN(Number(v)) ? v : Number(v) - off,
-  }));
-  const { vmin, vmax, span } = spectrumStats(bands);
-  const topFirst = [...bands].reverse();
-
-  barsEl.innerHTML = topFirst
-    .map((b) => {
-      const v = Number(b.value);
-      const pct = Number.isNaN(v)
-        ? 0
-        : Math.max(6, Math.min(100, ((v - vmin) / span) * 100));
-      const hot = !Number.isNaN(v) && v >= vmax - 1.5;
-      const lf = lfBands ? lfBands.has(String(b.band)) : true;
-      const cls = `chart-spec-bar${hot ? " is-hot" : ""}${lf ? " is-lf" : ""}`;
-      const txt = Number.isNaN(v) ? "—" : fmtDb(v);
-      return (
-        `<div class="${cls}" style="--p:${pct.toFixed(1)}%">` +
-        `<span class="chart-spec-bar-val">${txt}</span>` +
-        `<span class="chart-spec-bar-track"><span class="chart-spec-bar-fill"></span></span>` +
-        `</div>`
-      );
-    })
-    .join("");
-  barsEl.hidden = false;
 }
 
 /** Spektrum u crosshairu — dB + linky vlevo přes spektrogram, vedle Y stupnice. */
@@ -1913,7 +1898,14 @@ function showSpecTooltip(tsSec, _lineLeft) {
         state.fineSpecTooltipColTs = fineCol.t;
         const labels = state.chartFineSpectrogram?.labels || [];
         const bandIds = state.chartFineSpectrogram?.bands || [];
-        fillSpecBars(fineBarsEl, fineCol, labels, bandIds, null);
+        fillSpecBars(
+          fineBarsEl,
+          fineCol,
+          labels,
+          bandIds,
+          null,
+          state.fineSpecRowWeights
+        );
       }
       any = true;
     } else {
@@ -1972,7 +1964,7 @@ function showChartCrosshair(tsSec) {
   el.style.top = `${top}px`;
   el.style.height = `${Math.max(0, bottom - top)}px`;
   el.title = fmtTime(tsSec);
-  showChartTooltipAt(tsSec);
+  showChartHoverPanel(tsSec);
   showSpecTooltip(tsSec, left);
 }
 
@@ -2006,6 +1998,109 @@ function fineSpecYLabel(lab, hz) {
   return lab || "";
 }
 
+/**
+ * Fisheye layout řádků (řádek 0 = nahoře / vyšší Hz).
+ * @returns {{ edges: number[], weights: number[] }}
+ */
+function fisheyeBandLayout(nBands, height, focusNorm, strength, radius) {
+  const weights = new Array(nBands);
+  let sum = 0;
+  const f =
+    focusNorm == null || !Number.isFinite(focusNorm)
+      ? null
+      : Math.min(1, Math.max(0, focusNorm));
+  for (let row = 0; row < nBands; row++) {
+    let w = 1;
+    if (f != null) {
+      const center = (row + 0.5) / nBands;
+      const d = (center - f) / Math.max(1e-6, radius);
+      w = 1 + (strength - 1) * Math.exp(-0.5 * d * d);
+    }
+    weights[row] = w;
+    sum += w;
+  }
+  const edges = new Array(nBands + 1);
+  edges[0] = 0;
+  let y = 0;
+  for (let row = 0; row < nBands; row++) {
+    y += (weights[row] / sum) * height;
+    edges[row + 1] = y;
+  }
+  edges[nBands] = height;
+  return { edges, weights };
+}
+
+function scheduleFineLens(norm) {
+  const next =
+    norm == null || !Number.isFinite(norm)
+      ? null
+      : Math.min(1, Math.max(0, norm));
+  if (next == null && state.fineSpecLensNorm == null) return;
+  if (
+    next != null &&
+    state.fineSpecLensNorm != null &&
+    Math.abs(next - state.fineSpecLensNorm) < 0.004
+  ) {
+    return;
+  }
+  state.fineSpecLensNorm = next;
+  if (state.fineSpecLensRaf) return;
+  state.fineSpecLensRaf = requestAnimationFrame(() => {
+    state.fineSpecLensRaf = 0;
+    drawChartFineSpectrogram();
+    // force přepočet flex vah u dB sloupců
+    state.fineSpecTooltipColTs = null;
+    if (state.hoverTs != null) showSpecTooltip(state.hoverTs);
+  });
+}
+
+function clearFineLens() {
+  if (state.fineSpecLensNorm == null) return;
+  state.fineSpecLensNorm = null;
+  if (state.fineSpecLensRaf) {
+    cancelAnimationFrame(state.fineSpecLensRaf);
+    state.fineSpecLensRaf = 0;
+  }
+  drawChartFineSpectrogram();
+  state.fineSpecTooltipColTs = null;
+  if (state.hoverTs != null) showSpecTooltip(state.hoverTs);
+}
+
+function fillSpecBars(barsEl, col, labels, bandIds, lfBands, rowWeights) {
+  const off = windowOffset();
+  const bands = col.v.map((v, i) => ({
+    band: bandIds?.[i] || "",
+    label: labels[i] || "",
+    value: v == null || Number.isNaN(Number(v)) ? v : Number(v) - off,
+  }));
+  const { vmin, vmax, span } = spectrumStats(bands);
+  const topFirst = [...bands].reverse();
+
+  barsEl.innerHTML = topFirst
+    .map((b, row) => {
+      const v = Number(b.value);
+      const pct = Number.isNaN(v)
+        ? 0
+        : Math.max(6, Math.min(100, ((v - vmin) / span) * 100));
+      const hot = !Number.isNaN(v) && v >= vmax - 1.5;
+      const lf = lfBands ? lfBands.has(String(b.band)) : true;
+      const cls = `chart-spec-bar${hot ? " is-hot" : ""}${lf ? " is-lf" : ""}`;
+      const txt = Number.isNaN(v) ? "—" : fmtDb(v);
+      const flex =
+        rowWeights && rowWeights[row] != null
+          ? `flex:${Number(rowWeights[row]).toFixed(3)} 1 0;`
+          : "";
+      return (
+        `<div class="${cls}" style="${flex}--p:${pct.toFixed(1)}%">` +
+        `<span class="chart-spec-bar-val">${txt}</span>` +
+        `<span class="chart-spec-bar-track"><span class="chart-spec-bar-fill"></span></span>` +
+        `</div>`
+      );
+    })
+    .join("");
+  barsEl.hidden = false;
+}
+
 function drawHeatmapSpectrogram({
   canvasId,
   stripId,
@@ -2015,6 +2110,7 @@ function drawHeatmapSpectrogram({
   data,
   emptyText,
   yLabelFn,
+  fisheye = false,
 }) {
   const canvas = $(canvasId);
   const strip = $(stripId);
@@ -2041,7 +2137,11 @@ function drawHeatmapSpectrogram({
     ctx.fillStyle = "#a8bab2";
     ctx.font = "12px Sora, sans-serif";
     ctx.fillText(emptyText, 10, Math.round(h / 2));
-    if (yEl) yEl.innerHTML = "";
+    if (yEl) {
+      yEl.classList.remove("is-fisheye");
+      yEl.innerHTML = "";
+    }
+    if (fisheye) state.fineSpecRowWeights = null;
     return;
   }
 
@@ -2052,24 +2152,47 @@ function drawHeatmapSpectrogram({
   const nBands = labels.length || (cols[0].v?.length ?? 0);
   if (!nBands) return;
 
+  const focus = fisheye ? state.fineSpecLensNorm : null;
+  const { edges, weights } = fisheyeBandLayout(
+    nBands,
+    h,
+    focus,
+    FINE_LENS_STRENGTH,
+    FINE_LENS_RADIUS
+  );
+  if (fisheye) state.fineSpecRowWeights = weights;
+
   if (yEl) {
-    // high freq nahoře (stejně jako heatmapa)
+    const meanW = weights.reduce((a, b) => a + b, 0) / nBands;
+    const lensOn = focus != null;
+    yEl.classList.toggle("is-fisheye", lensOn);
+    // high freq nahoře
     yEl.innerHTML = [...labels]
-      .map((lab, i) => (yLabelFn ? yLabelFn(lab, hzList[i]) : lab))
+      .map((lab, i) => {
+        const row = nBands - 1 - i;
+        const hz = hzList[i];
+        let text = yLabelFn ? yLabelFn(lab, hz) : lab;
+        const hot =
+          lensOn &&
+          weights[row] >= meanW * 2.2 &&
+          Number.isFinite(Number(hz));
+        // Jen v jádru lupy: každý Hz + větší text.
+        if (hot) text = `${Math.round(Number(hz))}`;
+        const flex = lensOn ? `flex:${weights[row].toFixed(3)} 1 0;` : "";
+        const cls = hot ? ' class="is-lens-hot"' : "";
+        return `<span${cls} style="${flex}">${text || ""}</span>`;
+      })
       .reverse()
-      .map((lab) => `<span>${lab || ""}</span>`)
       .join("");
   }
 
   const vmin = (data.vmin ?? 20) - windowOffset();
   const vmax = Math.max(vmin + 8, (data.vmax ?? 60) - windowOffset());
   const vSpan = vmax - vmin;
-  const rowH = h / nBands;
 
   ctx.fillStyle = "#0a1010";
   ctx.fillRect(0, 0, w, h);
 
-  // Šířka sloupce podle hustoty v okně (min 1 px).
   const inView = cols.filter((c) => c.t >= t0 - span * 0.02 && c.t <= t1 + span * 0.02);
   const colW = Math.max(1, w / Math.max(1, inView.length));
   const off = windowOffset();
@@ -2080,24 +2203,46 @@ function drawHeatmapSpectrogram({
     const vals = col.v || [];
     for (let b = 0; b < nBands; b++) {
       const row = nBands - 1 - b;
+      const y0 = edges[row];
+      const y1 = edges[row + 1];
       const raw = vals[b] ?? data.vmin ?? 20;
       const shown = Number(raw) - off;
       const t = (shown - vmin) / vSpan;
       ctx.fillStyle = dbToColor(t);
       ctx.fillRect(
         Math.floor(x - colW / 2),
-        Math.floor(row * rowH),
+        Math.floor(y0),
         Math.ceil(colW) + 1,
-        Math.ceil(rowH) + 1
+        Math.max(1, Math.ceil(y1 - y0) + 1)
       );
     }
   }
 
-  const edges = data.limit_change_edges || [];
-  if (edges.length) {
+  // Jemný pás lupy
+  if (fisheye && focus != null) {
+    const cy = focus * h;
+    const band = FINE_LENS_RADIUS * h * 1.6;
+    const g = ctx.createLinearGradient(0, cy - band, 0, cy + band);
+    g.addColorStop(0, "rgba(255,255,255,0)");
+    g.addColorStop(0.45, "rgba(255,255,255,0.04)");
+    g.addColorStop(0.5, "rgba(255,255,255,0.07)");
+    g.addColorStop(0.55, "rgba(255,255,255,0.04)");
+    g.addColorStop(1, "rgba(255,255,255,0)");
+    ctx.fillStyle = g;
+    ctx.fillRect(0, cy - band, w, band * 2);
+    ctx.strokeStyle = "rgba(168, 186, 178, 0.35)";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(0, Math.round(cy) + 0.5);
+    ctx.lineTo(w, Math.round(cy) + 0.5);
+    ctx.stroke();
+  }
+
+  const edgesLim = data.limit_change_edges || [];
+  if (edgesLim.length) {
     ctx.strokeStyle = "#ff2d95";
     ctx.lineWidth = 2;
-    for (const edgeT of edges) {
+    for (const edgeT of edgesLim) {
       if (edgeT <= t0 || edgeT >= t1) continue;
       const x = Math.round(((edgeT - t0) / span) * w) + 0.5;
       ctx.beginPath();
@@ -2130,6 +2275,7 @@ function drawChartFineSpectrogram() {
     data: state.chartFineSpectrogram,
     emptyText: "High-res FFT…",
     yLabelFn: fineSpecYLabel,
+    fisheye: true,
   });
 }
 
@@ -2426,7 +2572,6 @@ function bindChartPan() {
   let originT0 = 0;
   let originT1 = 0;
   let moved = false;
-  let tipWasEnabled = true;
 
   const setDraggingClass = (on) => {
     chartCanvas.classList.toggle("is-dragging", on);
@@ -2447,10 +2592,6 @@ function bindChartPan() {
       /* ignore */
     }
     activeEl = null;
-    const chart = state.chart;
-    if (chart?.options?.plugins?.tooltip) {
-      chart.options.plugins.tooltip.enabled = tipWasEnabled;
-    }
     if (!wasDragging || !moved) return;
     const now = Date.now() / 1000;
     const { t0, t1 } = state.chartRange;
@@ -2488,8 +2629,6 @@ function bindChartPan() {
     moved = false;
     state.chartPanning = true;
     setDraggingClass(true);
-    tipWasEnabled = chart.options.plugins?.tooltip?.enabled !== false;
-    if (chart.options.plugins?.tooltip) chart.options.plugins.tooltip.enabled = false;
     el.setPointerCapture(ev.pointerId);
     hideChartCrosshair();
     closeAircraftPopup();
@@ -2568,6 +2707,28 @@ function bindChartCrosshair() {
       hideChartCrosshair();
       return;
     }
+
+    const fineCanvas = $("chartFineSpectrogram");
+    const fineStrip = $("chartFineSpecStrip");
+    if (
+      fineCanvas &&
+      fineStrip &&
+      !fineStrip.hidden &&
+      fineSpectrumVisible()
+    ) {
+      const rect = fineCanvas.getBoundingClientRect();
+      const overFine =
+        ev.clientX >= rect.left &&
+        ev.clientX <= rect.right &&
+        ev.clientY >= rect.top &&
+        ev.clientY <= rect.bottom;
+      if (overFine) {
+        scheduleFineLens((ev.clientY - rect.top) / Math.max(1, rect.height));
+      } else if (state.fineSpecLensNorm != null) {
+        clearFineLens();
+      }
+    }
+
     showChartCrosshair(ts);
   });
   stack.addEventListener("mouseleave", () => hideChartCrosshair());

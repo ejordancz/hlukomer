@@ -9,7 +9,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,700&family=IBM+Plex+Mono:wght@400;500&family=Sora:wght@400;500;600&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/static/style.css?v=67" />
+  <link rel="stylesheet" href="/static/style.css?v=76" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@mdi/font@7.4.47/css/materialdesignicons.min.css" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.9/dist/chart.umd.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
@@ -18,6 +18,28 @@
 </head>
 <body>
   <div class="bg" aria-hidden="true"></div>
+
+  <div class="chart-hover-panel" id="chartHoverPanel" hidden role="status" aria-live="polite">
+    <div class="chart-hover-item chart-hover-level" title="Hladina hluku">
+      <span class="mdi mdi-volume-high chart-hover-icon" aria-hidden="true"></span>
+      <span class="chart-hover-val" id="hoverLevel">—.—</span>
+      <span class="chart-hover-unit">dBA</span>
+    </div>
+    <div class="chart-hover-item chart-hover-time" title="Datum a čas">
+      <span class="mdi mdi-clock-outline chart-hover-icon" aria-hidden="true"></span>
+      <span class="chart-hover-val" id="hoverTime">—</span>
+    </div>
+    <div class="chart-hover-item chart-hover-limit" title="Hygienický limit" id="hoverLimitItem">
+      <span class="mdi mdi-ray-start-arrow chart-hover-icon chart-hover-icon-limit" aria-hidden="true"></span>
+      <span class="chart-hover-val" id="hoverLimit">—.—</span>
+      <span class="chart-hover-unit">dBA limit</span>
+    </div>
+    <div class="chart-hover-item chart-hover-excess" title="Odchylka od limitu" id="hoverExcessItem">
+      <span class="mdi mdi-plus-minus-variant chart-hover-icon" aria-hidden="true"></span>
+      <span class="chart-hover-val" id="hoverExcess">—.—</span>
+      <span class="chart-hover-unit">dB od limitu</span>
+    </div>
+  </div>
 
   <header class="top">
     <div class="brand">
@@ -191,7 +213,7 @@
                 <div class="chart-spec-bars" id="chartFineSpecBars" hidden aria-hidden="true"></div>
                 <canvas
                   id="chartFineSpectrogram"
-                  height="360"
+                  height="384"
                   role="img"
                   aria-label="High-res FFT 190 až 270 Hz"
                 ></canvas>
@@ -365,6 +387,6 @@
     </span>
   </button>
 
-  <script src="/static/app.js?v=62"></script>
+  <script src="/static/app.js?v=68"></script>
 </body>
 </html>
