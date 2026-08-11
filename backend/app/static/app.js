@@ -66,6 +66,8 @@ const CHART_EXCESS_COLOR = "#e85d4c";
 const CHART_EXCESS_SKIPPED_COLOR = "rgba(150, 162, 158, 0.42)";
 /** Spektrogram pod hlavním grafem jen pro rozsah ≤ 48 h. */
 const CHART_SPEC_MAX_HOURS = 48;
+/** Max. počet bodů přidaných klikem na spektrogram. */
+const SPEC_MARKS_MAX = 10;
 
 const CHART_DBA_COLOR = "#7ec8a3";
 const CHART_DBA_FILL = "rgba(126, 200, 163, 0.12)";
@@ -159,6 +161,12 @@ const state = {
   specKbdNav: null,
   /** Poslední pozice myši nad spektrogramem (pro start WASD). */
   specPointerLast: null,
+  /**
+   * Body přidané klikem na spektrogram (max SPEC_MARKS_MAX):
+   * { id, target:'main'|'fine', t, band, label, raw }
+   */
+  specMarks: [],
+  specMarkSeq: 0,
   /** Hlavní graf: true = okno končí „teď“, start se posouvá s časem. */
   chartLive: true,
   /** Pevný začátek okna grafu (unix s), když chartLive=false. */
@@ -1119,45 +1127,42 @@ function applyHistoryDisplay({ refetchSpec = true } = {}) {
   }
 }
 
-/** Jednotný český 24h formát času (bez AM/PM). */
-const TIME_OPTS = {
-  hour: "2-digit",
-  minute: "2-digit",
-  hour12: false,
-};
+/** Jednotný formát data: DD.MM.YY */
+function fmtDateDMY(d) {
+  return `${pad2(d.getDate())}.${pad2(d.getMonth() + 1)}.${pad2(d.getFullYear() % 100)}`;
+}
+
+/** Čas HH:mm nebo HH:mm:ss (24h). */
+function fmtClock(d, { withSeconds = false } = {}) {
+  const t = `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+  return withSeconds ? `${t}:${pad2(d.getSeconds())}` : t;
+}
 
 function fmtTime(ts) {
   const d = new Date(ts * 1000);
-  return d.toLocaleString("cs-CZ", {
-    day: "2-digit",
-    month: "2-digit",
-    ...TIME_OPTS,
-    second: "2-digit",
-  });
+  return `${fmtDateDMY(d)} ${fmtClock(d, { withSeconds: true })}`;
 }
 
-/** Osa grafu / spektrogramu: HH:mm, u delších rozsahů i den. */
+/** Osa grafu / spektrogramu: HH:mm, u delších rozsahů i DD.MM.YY. */
 function fmtAxisTime(ts, { withDate = false } = {}) {
   const d = new Date(ts * 1000);
-  return d.toLocaleString("cs-CZ", {
-    ...TIME_OPTS,
-    ...(withDate ? { day: "2-digit", month: "2-digit" } : {}),
-  });
+  const clock = fmtClock(d);
+  return withDate ? `${fmtDateDMY(d)} ${clock}` : clock;
 }
 
-/** Chart.js displayFormats — vždy 24h, české tečky u data. */
+/** Chart.js displayFormats — vždy 24h, datum DD.MM.YY. */
 function chartTimeFormats(hours) {
   const withDate = Number(hours) >= 48;
   return {
     millisecond: "HH:mm:ss",
     second: "HH:mm:ss",
-    minute: withDate ? "dd. MM. HH:mm" : "HH:mm",
-    hour: withDate ? "dd. MM. HH:mm" : "HH:mm",
-    day: "dd. MM.",
-    week: "dd. MM.",
-    month: "MM. yyyy",
-    quarter: "QQQ yyyy",
-    year: "yyyy",
+    minute: withDate ? "dd.MM.yy HH:mm" : "HH:mm",
+    hour: withDate ? "dd.MM.yy HH:mm" : "HH:mm",
+    day: "dd.MM.yy",
+    week: "dd.MM.yy",
+    month: "MM.yy",
+    quarter: "QQQ yy",
+    year: "yy",
   };
 }
 
@@ -1489,7 +1494,7 @@ function initChart() {
         x: {
           type: "time",
           time: {
-            tooltipFormat: "dd. MM. yyyy HH:mm:ss",
+            tooltipFormat: "dd.MM.yy HH:mm:ss",
             displayFormats: chartTimeFormats(24),
           },
           grid: { color: "rgba(232,240,236,0.06)" },
@@ -2211,6 +2216,196 @@ function nearestSpecColumn(tsSec) {
   return nearestSpecColumnFrom(state.chartSpectrogram, tsSec);
 }
 
+function syncSpecMarksUi() {
+  const btn = $("chartSpecMarksClear");
+  if (btn) btn.hidden = !(state.specMarks?.length > 0);
+}
+
+function clearSpecMarks() {
+  if (!state.specMarks?.length) return;
+  state.specMarks = [];
+  syncSpecMarksUi();
+  drawChartSpectrogram();
+  drawChartFineSpectrogram();
+}
+
+/**
+ * Popisek frekvence pro bod spektrogramu (stejná logika jako hover readout).
+ * @returns {string | null}
+ */
+function specMarkLabelFor(target, band) {
+  if (target === "fine") {
+    const data = state.chartFineSpectrogram;
+    const n = data?.hz?.length || 0;
+    if (band == null || band < 0 || band >= n) return null;
+    const hz = Number(data.hz[band]);
+    return Number.isFinite(hz) ? `${Math.round(hz)} Hz` : "—";
+  }
+  const data = state.chartSpectrogram;
+  const n = data?.labels?.length || data?.hz?.length || SPECTRUM_FALLBACK.length;
+  if (band == null || band < 0 || band >= n) return null;
+  return (
+    data?.labels?.[band] ||
+    SPECTRUM_FALLBACK[band] ||
+    (Number.isFinite(Number(data?.hz?.[band]))
+      ? `${Math.round(Number(data.hz[band]))} Hz`
+      : "—")
+  );
+}
+
+/** Klik na spektrogram → nový bod (max SPEC_MARKS_MAX). */
+function tryAddSpecMark(clientX, clientY) {
+  if ((state.specMarks?.length || 0) >= SPEC_MARKS_MAX) return false;
+  const hit = spectrogramHitAt(clientX, clientY);
+  if (!hit) return false;
+
+  const ts = timeFromChartClientXClamped(clientX);
+  if (ts == null) return false;
+
+  let data = null;
+  let band = null;
+  let maxDistSec = null;
+  if (hit.target === "fine") {
+    if (!fineSpectrumVisible()) return false;
+    data = state.chartFineSpectrogram;
+    band = fineSpecBandAtClientY(clientY);
+    maxDistSec = fineSpecHoverMaxDistSec(data);
+  } else {
+    if (!chartSpecEnabled()) return false;
+    data = state.chartSpectrogram;
+    band = specBandAtClientY(clientY);
+  }
+  if (band == null) return false;
+
+  const label = specMarkLabelFor(hit.target, band);
+  if (!label) return false;
+
+  const col = nearestSpecColumnFrom(data, ts, maxDistSec);
+  if (!col?.v?.length) return false;
+  const raw = col.v[band];
+  if (raw == null || Number.isNaN(Number(raw))) return false;
+
+  state.specMarkSeq += 1;
+  state.specMarks.push({
+    id: state.specMarkSeq,
+    target: hit.target,
+    t: col.t,
+    band,
+    label,
+    raw: Number(raw),
+  });
+  syncSpecMarksUi();
+  if (hit.target === "fine") drawChartFineSpectrogram();
+  else drawChartSpectrogram();
+  return true;
+}
+
+/**
+ * Vykreslí uložené body spektrogramu (křížek + hodnoty).
+ * @param {'main'|'fine'} markTarget
+ */
+function drawSpecMarks(ctx, w, h, nBands, markTarget) {
+  const marks = state.specMarks?.filter((m) => m.target === markTarget);
+  if (!marks?.length || !nBands) return;
+
+  const { t0, t1 } = state.chartRange;
+  const span = Math.max(1e-6, t1 - t0);
+  const rowH = h / nBands;
+  const off = windowOffset();
+  const placed = [];
+  const boxGap = 2;
+  const overlaps = (a, b) =>
+    !(a.x + a.w <= b.x || b.x + b.w <= a.x || a.y + a.h <= b.y || b.y + b.h <= a.y);
+
+  ctx.save();
+  ctx.font = "600 11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
+  ctx.textBaseline = "middle";
+
+  for (let i = 0; i < marks.length; i++) {
+    const m = marks[i];
+    if (m.t < t0 - span * 0.02 || m.t > t1 + span * 0.02) continue;
+    if (m.band < 0 || m.band >= nBands) continue;
+
+    const x = ((m.t - t0) / span) * w;
+    const row = nBands - 1 - m.band;
+    const y = (row + 0.5) * rowH;
+    const shown = Number(m.raw) - off;
+    const dbTxt = Number.isNaN(shown) ? "—.—" : fmtDb(shown);
+    const line1 = fmtTime(m.t);
+    const line2 = `${m.label} · ${dbTxt} dB`;
+
+    // křížek
+    ctx.strokeStyle = "rgba(0,0,0,0.85)";
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(x - 5, y);
+    ctx.lineTo(x + 5, y);
+    ctx.moveTo(x, y - 5);
+    ctx.lineTo(x, y + 5);
+    ctx.stroke();
+    ctx.strokeStyle = "#c4f082";
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(x - 5, y);
+    ctx.lineTo(x + 5, y);
+    ctx.moveTo(x, y - 5);
+    ctx.lineTo(x, y + 5);
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.fillStyle = "#c4f082";
+    ctx.arc(x, y, 2.2, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = "rgba(0,0,0,0.9)";
+    ctx.lineWidth = 1;
+    ctx.stroke();
+
+    const padX = 5;
+    const padY = 3;
+    const lineH = 13;
+    const gap = 8;
+    const tw = Math.max(ctx.measureText(line1).width, ctx.measureText(line2).width);
+    const th = lineH * 2;
+    const rw = tw + padX * 2;
+    const rh = th + padY * 2;
+
+    // Popisek pod bodem; při kolizi s jiným boxem posunout níže.
+    let lx = x - rw / 2;
+    if (lx < 2) lx = 2;
+    if (lx + rw > w - 2) lx = w - 2 - rw;
+    let lyTop = y + gap;
+    const box = { x: lx, y: lyTop, w: rw, h: rh };
+    for (let guard = 0; guard < 40; guard++) {
+      let hit = null;
+      for (const p of placed) {
+        if (!overlaps(box, p)) continue;
+        if (!hit || p.y + p.h > hit.y + hit.h) hit = p;
+      }
+      if (!hit) break;
+      box.y = hit.y + hit.h + boxGap;
+    }
+    if (box.y + box.h > h - 2) box.y = Math.max(2, h - 2 - box.h);
+    placed.push({ x: box.x, y: box.y, w: box.w, h: box.h });
+    lyTop = box.y;
+
+    ctx.fillStyle = "rgba(8, 12, 11, 0.88)";
+    ctx.strokeStyle = "rgba(168, 186, 178, 0.28)";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.rect(lx, lyTop, rw, rh);
+    ctx.fill();
+    ctx.stroke();
+
+    const textX = lx + padX;
+    const midY = lyTop + padY + th / 2;
+    ctx.fillStyle = "#e8f0ec";
+    ctx.textAlign = "left";
+    ctx.fillText(line1, textX, midY - lineH / 2);
+    ctx.fillText(line2, textX, midY + lineH / 2);
+  }
+  ctx.restore();
+}
+
 /** Jemné spektrum: minimální tolerance (s) při hledání nejbližšího sloupce. */
 const FINE_SPEC_HOVER_MAX_DIST_S = 10;
 
@@ -2455,6 +2650,7 @@ function drawHeatmapSpectrogram({
   emptyText,
   yLabelFn,
   skipYLabels = false,
+  markTarget = null,
 }) {
   const canvas = $(canvasId);
   const strip = $(stripId);
@@ -2553,6 +2749,8 @@ function drawHeatmapSpectrogram({
       ctx.stroke();
     }
   }
+
+  if (markTarget) drawSpecMarks(ctx, w, h, nBands, markTarget);
 }
 
 function drawChartSpectrogram() {
@@ -2564,6 +2762,7 @@ function drawChartSpectrogram() {
     height: CHART_SPEC_HEIGHT,
     data: state.chartSpectrogram,
     emptyText: "Spektrum…",
+    markTarget: "main",
   });
 }
 
@@ -2591,6 +2790,7 @@ function drawChartFineSpectrogram() {
       if (!Number.isFinite(h) || Math.round(h) % 5 !== 0) return "";
       return lab || `${Math.round(h)} Hz`;
     },
+    markTarget: "fine",
   });
 }
 
@@ -2891,6 +3091,10 @@ function bindChartPan() {
   const endPan = (ev) => {
     if (pointerId == null || (ev && ev.pointerId !== pointerId)) return;
     const wasDragging = state.chartPanning;
+    const wasSpecClick =
+      !moved && (activeEl === specCanvas || activeEl === fineSpecCanvas);
+    const clickX = ev?.clientX;
+    const clickY = ev?.clientY;
     state.chartPanning = false;
     pointerId = null;
     setDraggingClass(false);
@@ -2900,7 +3104,13 @@ function bindChartPan() {
       /* ignore */
     }
     activeEl = null;
-    if (!wasDragging || !moved) return;
+    if (!wasDragging) return;
+    if (!moved) {
+      if (wasSpecClick && clickX != null && clickY != null) {
+        tryAddSpecMark(clickX, clickY);
+      }
+      return;
+    }
     const now = Date.now() / 1000;
     const { t0, t1 } = state.chartRange;
     if (t1 >= now - 1.5) {
@@ -3150,6 +3360,10 @@ function bind() {
     if (isCustomRange()) syncCustomRangeInputs(t0, t1);
     applyHistoryTimeRange(t0, t1, hours);
     refreshHistory();
+  });
+  $("chartSpecMarksClear")?.addEventListener("click", (ev) => {
+    ev.stopPropagation();
+    clearSpecMarks();
   });
 
   bindDisplayToggles();

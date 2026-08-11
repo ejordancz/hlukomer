@@ -1185,6 +1185,25 @@ main {
   margin: 0;
 }
 
+.chart-spec-head-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.65rem;
+  flex-shrink: 0;
+}
+
+.chart-spec-marks-clear {
+  padding: 0.2rem 0.55rem;
+  font-size: 0.68rem;
+  letter-spacing: 0.02em;
+  text-transform: none;
+  border-radius: 0.3rem;
+}
+
+.chart-spec-marks-clear[hidden] {
+  display: none;
+}
+
 .chart-fine-spec-body {
   display: flex;
   align-items: flex-start;

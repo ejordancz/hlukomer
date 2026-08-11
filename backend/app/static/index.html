@@ -203,9 +203,19 @@
           <div class="chart-spec-strip" id="chartSpecStrip" hidden>
             <div class="chart-spec-head">
               <p class="chart-pane-title">Spektrogram 1/3 oktávy</p>
-              <div class="chart-spec-info" id="chartSpecKbdInfo">
-                <span class="chart-spec-info-mark" aria-hidden="true">i</span>
-                <span class="chart-spec-info-text" id="chartSpecKbdInfoTip">WSAD pro pohyb</span>
+              <div class="chart-spec-head-actions">
+                <button
+                  type="button"
+                  class="ghost-btn chart-spec-marks-clear"
+                  id="chartSpecMarksClear"
+                  hidden
+                >
+                  Smazat body
+                </button>
+                <div class="chart-spec-info" id="chartSpecKbdInfo">
+                  <span class="chart-spec-info-mark" aria-hidden="true">i</span>
+                  <span class="chart-spec-info-text" id="chartSpecKbdInfoTip">Klik = bod · WSAD pohyb</span>
+                </div>
               </div>
             </div>
             <div class="chart-spec-body">
