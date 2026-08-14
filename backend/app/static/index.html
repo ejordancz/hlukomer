@@ -9,7 +9,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,700&family=IBM+Plex+Mono:wght@400;500&family=Sora:wght@400;500;600&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/static/style.css?v=90" />
+  <link rel="stylesheet" href="/static/style.css?v=93" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@mdi/font@7.4.47/css/materialdesignicons.min.css" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.9/dist/chart.umd.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
@@ -44,10 +44,10 @@
   <header class="top">
     <div class="brand">
       <span class="brand-mark" aria-hidden="true">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M11 5 6 9H2v6h4l5 4V5z" />
-          <path d="M15.54 8.46a5 5 0 0 1 0 7.07" />
-          <path d="M19.07 4.93a10 10 0 0 1 0 14.14" />
+        <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path class="brand-mark-speaker" d="M11 5 6 9H2v6h4l5 4V5z" />
+          <path class="brand-mark-wave brand-mark-wave-near" d="M15.54 8.46a5 5 0 0 1 0 7.07" />
+          <path class="brand-mark-wave brand-mark-wave-far" d="M19.07 4.93a10 10 0 0 1 0 14.14" />
         </svg>
       </span>
       <div>
@@ -55,6 +55,19 @@
         <p class="brand-note">Orientační měření.</p>
       </div>
     </div>
+    <a
+      class="survey-banner"
+      href="https://anketa.hluk.cloud"
+      target="_blank"
+      rel="noopener noreferrer"
+    >
+      <svg class="survey-banner-icon" viewBox="0 0 24 24" aria-hidden="true">
+        <rect class="survey-bar survey-bar-1" x="3" y="12" width="5" height="9" rx="1.2" />
+        <rect class="survey-bar survey-bar-2" x="9.5" y="4" width="5" height="17" rx="1.2" />
+        <rect class="survey-bar survey-bar-3" x="16" y="8" width="5" height="13" rx="1.2" />
+      </svg>
+      <span class="survey-banner-text">Výsledky ankety</span>
+    </a>
     <div class="top-right">
       <div class="status" id="status" title="Stav připojení">
         <span class="dot" id="onlineDot"></span>
