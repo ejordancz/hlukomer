@@ -4,6 +4,7 @@
 
 #include <esp_http_client.h>
 
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 
@@ -11,6 +12,31 @@ namespace esphome {
 namespace hlukomer_fine_fft {
 
 static const char *const TAG = "hlukomer_fine_fft";
+
+/** Floor used instead of log10(0)/NaN — newlib log10f(0) divides by zero and panics on ESP32. */
+static constexpr float kMinPower = 1.0e-20f;
+
+static float sanitize_power(float p) {
+  if (!std::isfinite(p) || p < 0.0f)
+    return 0.0f;
+  return p;
+}
+
+static float power_to_db(float p, float offset) {
+  if (!std::isfinite(p) || p < kMinPower)
+    return offset - 200.0f;
+  return 10.0f * log10f(p) + offset;
+}
+
+static float clamp_json_db(float db) {
+  if (!std::isfinite(db))
+    return -99.9f;
+  if (db > 199.9f)
+    return 199.9f;
+  if (db < -199.9f)
+    return -199.9f;
+  return db;
+}
 
 void HlukomerFineFft::setup() {
   if (this->mic_ == nullptr) {
@@ -102,9 +128,7 @@ void HlukomerFineFft::finish_frame_() {
     const float s1 = this->s_prev2_[b];
     const float c = this->coeff_[b];
     float power = s1 * s1 + s0 * s0 - c * s0 * s1;
-    if (power < 0.0f)
-      power = 0.0f;
-    this->power_acc_[b] += power;
+    this->power_acc_[b] += sanitize_power(power);
     this->s_prev_[b] = 0.0f;
     this->s_prev2_[b] = 0.0f;
   }
@@ -113,9 +137,7 @@ void HlukomerFineFft::finish_frame_() {
     const float s1 = this->s_prev2_lf_[b];
     const float c = this->coeff_lf_[b];
     float power = s1 * s1 + s0 * s0 - c * s0 * s1;
-    if (power < 0.0f)
-      power = 0.0f;
-    this->power_acc_lf_[b] += power;
+    this->power_acc_lf_[b] += sanitize_power(power);
     this->s_prev_lf_[b] = 0.0f;
     this->s_prev2_lf_[b] = 0.0f;
   }
@@ -126,15 +148,11 @@ void HlukomerFineFft::finish_frame_() {
     const float norm = (static_cast<float>(FINE_N_FFT) * 0.5f);
     const float norm2 = norm * norm;
     for (int b = 0; b < FINE_N_BINS; b++) {
-      const float p = this->power_acc_[b] * inv_frames / norm2;
-      const float db = 10.0f * log10f(p + 1e-20f) + this->spl_offset_;
-      this->pending_db_[b] = db;
+      this->pending_db_[b] = sanitize_power(this->power_acc_[b] * inv_frames / norm2);
       this->power_acc_[b] = 0.0f;
     }
     for (int b = 0; b < FINE_LF_N_BINS; b++) {
-      const float p = this->power_acc_lf_[b] * inv_frames / norm2;
-      const float db = 10.0f * log10f(p + 1e-20f) + this->spl_offset_;
-      this->pending_db_lf_[b] = db;
+      this->pending_db_lf_[b] = sanitize_power(this->power_acc_lf_[b] * inv_frames / norm2);
       this->power_acc_lf_[b] = 0.0f;
     }
     this->frames_ready_ = 0;
@@ -143,6 +161,11 @@ void HlukomerFineFft::finish_frame_() {
 }
 
 void HlukomerFineFft::maybe_post_() {
+  // dB conversion on the main loop — log10f on the I2S/SLM task (core 1) panicked.
+  for (int b = 0; b < FINE_N_BINS; b++)
+    this->pending_db_[b] = power_to_db(this->pending_db_[b], this->spl_offset_);
+  for (int b = 0; b < FINE_LF_N_BINS; b++)
+    this->pending_db_lf_[b] = power_to_db(this->pending_db_lf_[b], this->spl_offset_);
   this->post_json_(this->pending_db_, this->pending_db_lf_);
 }
 
@@ -155,7 +178,8 @@ bool HlukomerFineFft::post_json_(const float *db, const float *db_lf) {
   for (int i = 0; i < FINE_N_BINS; i++) {
     if (pos >= static_cast<int>(sizeof(body)) - 16)
       return false;
-    pos += snprintf(body + pos, sizeof(body) - pos, i ? ",%.1f" : "%.1f", static_cast<double>(db[i]));
+    pos += snprintf(body + pos, sizeof(body) - pos, i ? ",%.1f" : "%.1f",
+                    static_cast<double>(clamp_json_db(db[i])));
   }
   if (pos >= static_cast<int>(sizeof(body)) - 200)
     return false;
@@ -167,8 +191,8 @@ bool HlukomerFineFft::post_json_(const float *db, const float *db_lf) {
   for (int i = 0; i < FINE_LF_N_BINS; i++) {
     if (pos >= static_cast<int>(sizeof(body)) - 16)
       return false;
-    pos +=
-        snprintf(body + pos, sizeof(body) - pos, i ? ",%.1f" : "%.1f", static_cast<double>(db_lf[i]));
+    pos += snprintf(body + pos, sizeof(body) - pos, i ? ",%.1f" : "%.1f",
+                    static_cast<double>(clamp_json_db(db_lf[i])));
   }
   if (pos >= static_cast<int>(sizeof(body)) - 120)
     return false;

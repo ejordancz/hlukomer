@@ -67,6 +67,7 @@ class HlukomerFineFft : public Component {
   int sample_i_{0};
   int frames_ready_{0};
   bool post_pending_{false};
+  // Linear power after a 3 s integrate; converted to dB in maybe_post_().
   float pending_db_[FINE_N_BINS]{};
   float pending_db_lf_[FINE_LF_N_BINS]{};
 };

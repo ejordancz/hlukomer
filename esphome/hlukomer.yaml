@@ -7,8 +7,8 @@
 substitutions:
   device_name: hlukomer
   # IP/hostname Docker služby (stejná LAN jako ESP)
-  #api_base_url: "http://192.168.1.28:8080"
-  api_base_url: "http://192.168.1.20:8080"
+  api_base_url: "http://192.168.1.28:8080"
+  #api_base_url: "http://192.168.1.20:8080"
   # Po kalibraci: kladný = reportuje vyšší dB (viz CALIBRATION.md)
   calibration_offset: "-2.4dB"
 
@@ -26,9 +26,10 @@ esp32:
 external_components:
   - source: github://stas-sl/esphome-sound-level-meter@dev
     components: [sound_level_meter]
-  - source: github://ejordancz/hlukomer@main
+  - source:
+      type: local
+      path: components
     components: [hlukomer_fine_fft]
-    refresh: 1h
 
 wifi:
   ssid: !secret wifi_ssid
