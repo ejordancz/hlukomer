@@ -56,6 +56,8 @@ const LF_BANDS = new Set([
 const CHART_SPEC_HEIGHT = 288;
 /** High-res FFT 190–270 Hz — 81 × 1 Hz bin; kompaktní heatmapa. */
 const FINE_SPEC_N_BINS = 81;
+/** High-res FFT 25–70 Hz — 46 × 1 Hz bin. */
+const FINE_LF_SPEC_N_BINS = 46;
 /** Výška jednoho 1 Hz řádku v heatmapě (px) — celé spektrum musí být vidět. */
 const CHART_FINE_SPEC_ROW_H = 4;
 /** Výška grafu překročení limitu (~1/4 spektrogramu). */
@@ -142,16 +144,21 @@ const state = {
   historyReqId: 0,
   chartSpecReqId: 0,
   chartFineSpecReqId: 0,
+  chartFineLfSpecReqId: 0,
   chartSpectrogram: null,
   chartFineSpectrogram: null,
+  chartFineLfSpectrogram: null,
   hoverTs: null,
   /** Poslední klíč hodnot v horním hover panelu (méně DOM update). */
   chartHoverKey: null,
   /** Čas sloupce spektrogramu u Y stupnice (méně překreslení). */
   specTooltipColTs: null,
   fineSpecTooltipColTs: null,
+  fineLfSpecTooltipColTs: null,
   /** Index frekvenčního binu pod kurzorem na fine spektrogramu (0 = nejnižší Hz). */
   fineSpecFocusBand: null,
+  /** Index frekvenčního binu pod kurzorem na fine LF spektrogramu (0 = nejnižší Hz). */
+  fineLfSpecFocusBand: null,
   /** Index pásma pod kurzorem na 1/3oktávovém spektrogramu (0 = nejnižší Hz). */
   specFocusBand: null,
   /**
@@ -163,7 +170,7 @@ const state = {
   specPointerLast: null,
   /**
    * Body přidané klikem na spektrogram (max SPEC_MARKS_MAX):
-   * { id, target:'main'|'fine', t, band, label, raw }
+   * { id, target:'main'|'fine'|'fineLf', t, band, label, raw }
    */
   specMarks: [],
   specMarkSeq: 0,
@@ -322,6 +329,7 @@ function applyHistoryTimeRange(t0, t1, hours) {
   }
   drawChartSpectrogram();
   drawChartFineSpectrogram();
+  drawChartFineLfSpectrogram();
   drawChartExcess();
   renderChartAxisLabels();
   renderAircraftTimeline();
@@ -371,14 +379,33 @@ function specBandAtClientY(clientY) {
 /** Band index (0 = nejnižší Hz) z clientY nad fine canvasem. */
 function fineSpecBandAtClientY(clientY) {
   const data = state.chartFineSpectrogram;
-  const n = data?.hz?.length || data?.labels?.length || 0;
+  const n = data?.hz?.length || data?.labels?.length || FINE_SPEC_N_BINS;
   return spectrumBandAtClientY($("chartFineSpectrogram"), n, clientY);
+}
+
+/** Band index (0 = nejnižší Hz) z clientY nad fine LF canvasem. */
+function fineLfSpecBandAtClientY(clientY) {
+  const data = state.chartFineLfSpectrogram;
+  const n = data?.hz?.length || data?.labels?.length || FINE_LF_SPEC_N_BINS;
+  return spectrumBandAtClientY($("chartFineLfSpectrogram"), n, clientY);
 }
 
 /** Client Y středu daného 1 Hz binu na fine canvasu. */
 function fineSpecClientYForBand(band) {
   const canvas = $("chartFineSpectrogram");
   const data = state.chartFineSpectrogram;
+  const n = data?.hz?.length || data?.labels?.length || 0;
+  if (!canvas || !n) return null;
+  const b = Math.min(n - 1, Math.max(0, band));
+  const rect = canvas.getBoundingClientRect();
+  const rowFromTop = n - 1 - b;
+  return rect.top + ((rowFromTop + 0.5) / n) * rect.height;
+}
+
+/** Client Y středu daného 1 Hz binu na fine LF canvasu. */
+function fineLfSpecClientYForBand(band) {
+  const canvas = $("chartFineLfSpectrogram");
+  const data = state.chartFineLfSpectrogram;
   const n = data?.hz?.length || data?.labels?.length || 0;
   if (!canvas || !n) return null;
   const b = Math.min(n - 1, Math.max(0, band));
@@ -399,16 +426,30 @@ function clearFineSpecUi() {
   hideFineSpecCursorReadout();
 }
 
+function clearFineLfSpecUi() {
+  state.fineLfSpecFocusBand = null;
+  const yEl = $("chartFineLfSpecYLabels");
+  if (yEl) {
+    yEl.innerHTML = "";
+    yEl.style.height = "";
+  }
+  const wrap = $("chartFineLfSpecCanvasWrap");
+  if (wrap) wrap.style.height = "";
+  hideFineSpecCursorReadout();
+}
+
 function syncChartSpecVisibility(hours) {
   const on = chartSpecEnabled(hours);
   const fineOn = fineSpectrumVisible(hours);
   const strip = $("chartSpecStrip");
   const fineStrip = $("chartFineSpecStrip");
+  const fineLfStrip = $("chartFineLfSpecStrip");
   const labels = $("chartAxisLabels");
   const unavailable = $("chartSpecUnavailable");
   const stack = $("chartStack");
   if (strip) strip.hidden = !on;
   if (fineStrip) fineStrip.hidden = !fineOn;
+  if (fineLfStrip) fineLfStrip.hidden = !fineOn;
   if (labels) labels.hidden = !on;
   if (unavailable) {
     unavailable.hidden = on;
@@ -422,15 +463,19 @@ function syncChartSpecVisibility(hours) {
   }
   if (!fineOn) {
     state.chartFineSpectrogram = null;
+    state.chartFineLfSpectrogram = null;
     clearFineSpecUi();
+    clearFineLfSpecUi();
   }
   if (!on) {
     hideChartCrosshair();
     state.chartSpectrogram = null;
     state.chartFineSpectrogram = null;
+    state.chartFineLfSpectrogram = null;
     const yEl = $("chartSpecYLabels");
     if (yEl) yEl.innerHTML = "";
     clearFineSpecUi();
+    clearFineLfSpecUi();
   }
 }
 
@@ -1120,6 +1165,7 @@ function applyHistoryDisplay({ refetchSpec = true } = {}) {
   } else {
     drawChartSpectrogram();
     drawChartFineSpectrogram();
+    drawChartFineLfSpectrogram();
     drawChartExcess();
     renderChartAxisLabels();
     if (state.hoverTs != null) showChartCrosshair(state.hoverTs);
@@ -1740,6 +1786,14 @@ function layoutChartSpecStrip() {
   const fineY = $("chartFineSpecYLabels");
   if (fineY) fineY.style.width = padL;
 
+  const fineLfStrip = $("chartFineLfSpecStrip");
+  if (fineLfStrip) {
+    fineLfStrip.style.marginLeft = "0";
+    fineLfStrip.style.width = "100%";
+  }
+  const fineLfY = $("chartFineLfSpecYLabels");
+  if (fineLfY) fineLfY.style.width = padL;
+
   const excess = $("chartExcessStrip");
   if (excess) {
     excess.style.marginLeft = "0";
@@ -1846,6 +1900,7 @@ function hideChartCrosshair() {
   exitSpecKbdNav({ restoreHover: false });
   state.hoverTs = null;
   state.fineSpecFocusBand = null;
+  state.fineLfSpecFocusBand = null;
   state.specFocusBand = null;
   const el = $("chartCrosshair");
   if (el) el.hidden = true;
@@ -1883,6 +1938,13 @@ function showChartHCrosshair(plotRect, clientY) {
  */
 function chartPlotHitAt(clientX, clientY) {
   const specs = [
+    {
+      id: "fineLf",
+      stripId: "chartFineLfSpecStrip",
+      canvasId: "chartFineLfSpectrogram",
+      bodySel: ".chart-fine-spec-body",
+      enabled: () => fineSpectrumVisible(),
+    },
     {
       id: "fine",
       stripId: "chartFineSpecStrip",
@@ -1993,14 +2055,15 @@ function isTypingTarget(el) {
   return false;
 }
 
-/** @returns {{ target: 'main'|'fine', canvas: HTMLCanvasElement, rect: DOMRect } | null} */
+/** @returns {{ target: 'main'|'fine'|'fineLf', canvas: HTMLCanvasElement, rect: DOMRect } | null} */
 function spectrogramHitAt(clientX, clientY) {
   const candidates = [
+    { id: "chartFineLfSpectrogram", stripId: "chartFineLfSpecStrip", target: "fineLf" },
     { id: "chartFineSpectrogram", stripId: "chartFineSpecStrip", target: "fine" },
     { id: "chartSpectrogram", stripId: "chartSpecStrip", target: "main" },
   ];
   for (const c of candidates) {
-    if (c.target === "fine" && !fineSpectrumVisible()) continue;
+    if ((c.target === "fine" || c.target === "fineLf") && !fineSpectrumVisible()) continue;
     if (c.target === "main" && !chartSpecEnabled()) continue;
     const strip = $(c.stripId);
     const canvas = $(c.id);
@@ -2047,11 +2110,13 @@ function positionSpecPointer(clientX, clientY) {
 /** Aplikuje virtuální bod spektrogramu (crosshair). */
 function applySpecVirtualPointer(clientX, clientY, target) {
   const canvasId =
-    target === "fine"
-      ? "chartFineSpectrogram"
-      : target === "main"
-        ? "chartSpectrogram"
-        : null;
+    target === "fineLf"
+      ? "chartFineLfSpectrogram"
+      : target === "fine"
+        ? "chartFineSpectrogram"
+        : target === "main"
+          ? "chartSpectrogram"
+          : null;
   let hit = null;
   if (canvasId) {
     const canvas = $(canvasId);
@@ -2067,14 +2132,21 @@ function applySpecVirtualPointer(clientX, clientY, target) {
 
   const ts = timeFromChartClientXClamped(x);
   if (ts != null) {
-    if (hit.target === "fine") {
+    if (hit.target === "fineLf") {
+      state.fineLfSpecFocusBand = fineLfSpecBandAtClientY(y);
+      state.fineSpecFocusBand = null;
+      state.specFocusBand = null;
+    } else if (hit.target === "fine") {
       state.fineSpecFocusBand = fineSpecBandAtClientY(y);
+      state.fineLfSpecFocusBand = null;
       state.specFocusBand = null;
     } else if (hit.target === "main") {
       state.specFocusBand = specBandAtClientY(y);
       state.fineSpecFocusBand = null;
+      state.fineLfSpecFocusBand = null;
     } else {
       state.fineSpecFocusBand = null;
+      state.fineLfSpecFocusBand = null;
       state.specFocusBand = null;
     }
     showChartCrosshair(ts);
@@ -2118,7 +2190,11 @@ function moveSpecKbdNav(dx, dy) {
   const nav = state.specKbdNav;
   if (!nav?.active) return;
   const canvas =
-    nav.target === "fine" ? $("chartFineSpectrogram") : $("chartSpectrogram");
+    nav.target === "fineLf"
+      ? $("chartFineLfSpectrogram")
+      : nav.target === "fine"
+        ? $("chartFineSpectrogram")
+        : $("chartSpectrogram");
   if (!canvas) {
     exitSpecKbdNav({ restoreHover: false });
     return;
@@ -2126,14 +2202,17 @@ function moveSpecKbdNav(dx, dy) {
   const rect = canvas.getBoundingClientRect();
   nav.clientX = Math.min(rect.right, Math.max(rect.left, nav.clientX + dx));
 
-  if (nav.target === "fine" && dy !== 0) {
+  if ((nav.target === "fine" || nav.target === "fineLf") && dy !== 0) {
     // Po 1 Hz: jeden bin nahoru/dolů (ne pixelový skok přes 2 řádky).
-    const n = state.chartFineSpectrogram?.hz?.length || FINE_SPEC_N_BINS;
-    let band = fineSpecBandAtClientY(nav.clientY);
+    const isLf = nav.target === "fineLf";
+    const n = isLf
+      ? state.chartFineLfSpectrogram?.hz?.length || FINE_LF_SPEC_N_BINS
+      : state.chartFineSpectrogram?.hz?.length || FINE_SPEC_N_BINS;
+    let band = isLf ? fineLfSpecBandAtClientY(nav.clientY) : fineSpecBandAtClientY(nav.clientY);
     if (band == null) band = Math.floor(n / 2);
     // W/↑ = výš na canvasu = vyšší Hz = vyšší index binu.
     band = Math.min(n - 1, Math.max(0, band + (dy < 0 ? 1 : -1)));
-    const y = fineSpecClientYForBand(band);
+    const y = isLf ? fineLfSpecClientYForBand(band) : fineSpecClientYForBand(band);
     if (y != null) nav.clientY = y;
   } else {
     nav.clientY = Math.min(rect.bottom, Math.max(rect.top, nav.clientY + dy));
@@ -2227,6 +2306,7 @@ function clearSpecMarks() {
   syncSpecMarksUi();
   drawChartSpectrogram();
   drawChartFineSpectrogram();
+  drawChartFineLfSpectrogram();
 }
 
 /**
@@ -2234,8 +2314,9 @@ function clearSpecMarks() {
  * @returns {string | null}
  */
 function specMarkLabelFor(target, band) {
-  if (target === "fine") {
-    const data = state.chartFineSpectrogram;
+  if (target === "fine" || target === "fineLf") {
+    const data =
+      target === "fineLf" ? state.chartFineLfSpectrogram : state.chartFineSpectrogram;
     const n = data?.hz?.length || 0;
     if (band == null || band < 0 || band >= n) return null;
     const hz = Number(data.hz[band]);
@@ -2265,7 +2346,12 @@ function tryAddSpecMark(clientX, clientY) {
   let data = null;
   let band = null;
   let maxDistSec = null;
-  if (hit.target === "fine") {
+  if (hit.target === "fineLf") {
+    if (!fineSpectrumVisible()) return false;
+    data = state.chartFineLfSpectrogram;
+    band = fineLfSpecBandAtClientY(clientY);
+    maxDistSec = fineSpecHoverMaxDistSec(data);
+  } else if (hit.target === "fine") {
     if (!fineSpectrumVisible()) return false;
     data = state.chartFineSpectrogram;
     band = fineSpecBandAtClientY(clientY);
@@ -2295,7 +2381,8 @@ function tryAddSpecMark(clientX, clientY) {
     raw: Number(raw),
   });
   syncSpecMarksUi();
-  if (hit.target === "fine") drawChartFineSpectrogram();
+  if (hit.target === "fineLf") drawChartFineLfSpectrogram();
+  else if (hit.target === "fine") drawChartFineSpectrogram();
   else drawChartSpectrogram();
   return true;
 }
@@ -2432,6 +2519,7 @@ function fineSpecHoverMaxDistSec(data) {
 function hideSpecTooltip() {
   state.specTooltipColTs = null;
   state.fineSpecTooltipColTs = null;
+  state.fineLfSpecTooltipColTs = null;
   const bars = $("chartSpecBars");
   if (bars) {
     bars.hidden = true;
@@ -2460,7 +2548,18 @@ function updateSpecPointerReadout(tsSec) {
   let maxDistSec = null;
   let label = null;
 
-  if (state.fineSpecFocusBand != null && fineSpectrumVisible()) {
+  if (state.fineLfSpecFocusBand != null && fineSpectrumVisible()) {
+    data = state.chartFineLfSpectrogram;
+    focusBand = state.fineLfSpecFocusBand;
+    maxDistSec = fineSpecHoverMaxDistSec(data);
+    const n = data?.hz?.length || 0;
+    if (!data || focusBand < 0 || focusBand >= n) {
+      hideFineSpecCursorReadout();
+      return false;
+    }
+    const hz = Number(data.hz[focusBand]);
+    label = Number.isFinite(hz) ? `${Math.round(hz)} Hz` : "—";
+  } else if (state.fineSpecFocusBand != null && fineSpectrumVisible()) {
     data = state.chartFineSpectrogram;
     focusBand = state.fineSpecFocusBand;
     maxDistSec = fineSpecHoverMaxDistSec(data);
@@ -2501,7 +2600,8 @@ function updateSpecPointerReadout(tsSec) {
   const dbTxt = v == null || Number.isNaN(v) ? "—.—" : fmtDb(v);
   el.textContent = `${label} · ${dbTxt} dB`;
   el.hidden = false;
-  if (state.fineSpecFocusBand != null) state.fineSpecTooltipColTs = col.t;
+  if (state.fineLfSpecFocusBand != null) state.fineLfSpecTooltipColTs = col.t;
+  else if (state.fineSpecFocusBand != null) state.fineSpecTooltipColTs = col.t;
   return true;
 }
 
@@ -2567,9 +2667,13 @@ function showChartCrosshair(tsSec) {
   if (chartSpecEnabled() && !$("chartSpecStrip")?.hidden) {
     const labels = $("chartAxisLabels");
     const fineStrip = $("chartFineSpecStrip");
+    const fineLfStrip = $("chartFineLfSpecStrip");
     let endEl = labels && !labels.hidden ? labels : $("chartSpecStrip");
     if (fineStrip && !fineStrip.hidden) {
       endEl = labels && !labels.hidden ? labels : fineStrip;
+    }
+    if (fineLfStrip && !fineLfStrip.hidden) {
+      endEl = labels && !labels.hidden ? labels : fineLfStrip;
     }
     if (endEl) bottom = endEl.getBoundingClientRect().bottom - wrapRect.top;
   }
@@ -2794,6 +2898,34 @@ function drawChartFineSpectrogram() {
   });
 }
 
+function drawChartFineLfSpectrogram() {
+  const data = state.chartFineLfSpectrogram;
+  const strip = $("chartFineLfSpecStrip");
+  if (strip?.hidden) return;
+  const nBands = data?.labels?.length || data?.hz?.length || FINE_LF_SPEC_N_BINS;
+  const height = fineSpecHeight(nBands);
+  const yEl = $("chartFineLfSpecYLabels");
+  const wrap = $("chartFineLfSpecCanvasWrap");
+  if (yEl) yEl.style.height = `${height}px`;
+  if (wrap) wrap.style.height = `${height}px`;
+  drawHeatmapSpectrogram({
+    canvasId: "chartFineLfSpectrogram",
+    stripId: "chartFineLfSpecStrip",
+    wrapId: "chartFineLfSpecCanvasWrap",
+    yElId: "chartFineLfSpecYLabels",
+    height,
+    data,
+    emptyText: "High-res FFT LF…",
+    // 46 × 1 Hz — každých 5 Hz (25, 30, … 70).
+    yLabelFn: (lab, hz) => {
+      const h = Number(hz);
+      if (!Number.isFinite(h) || Math.round(h) % 5 !== 0) return "";
+      return lab || `${Math.round(h)} Hz`;
+    },
+    markTarget: "fineLf",
+  });
+}
+
 /** Nice upper bound for excess Y scale (dB above limit). */
 function niceExcessMax(rawMax) {
   const m = Math.max(1, Number(rawMax) || 0);
@@ -2881,8 +3013,10 @@ async function refreshChartSpectrogram() {
   if (!chartSpecEnabled()) {
     state.chartSpectrogram = null;
     state.chartFineSpectrogram = null;
+    state.chartFineLfSpectrogram = null;
     drawChartSpectrogram();
     drawChartFineSpectrogram();
+    drawChartFineLfSpectrogram();
     drawChartExcess();
     syncDisplayToggleUi();
     if (state.hoverTs == null) hideSpecTooltip();
@@ -2892,28 +3026,44 @@ async function refreshChartSpectrogram() {
   const { hours, start } = selectedHistoryRange();
   const reqId = ++state.chartSpecReqId;
   const fineReqId = ++state.chartFineSpecReqId;
+  const fineLfReqId = ++state.chartFineLfSpecReqId;
   try {
     let url = `/api/v1/spectrum/history?hours=${encodeURIComponent(hours)}&max_columns=480`;
     if (start != null) url += `&start=${encodeURIComponent(start)}`;
     let fineUrl = `/api/v1/spectrum/fine/history?hours=${encodeURIComponent(hours)}&max_columns=480`;
     if (start != null) fineUrl += `&start=${encodeURIComponent(start)}`;
+    let fineLfUrl = `/api/v1/spectrum/fine-lf/history?hours=${encodeURIComponent(hours)}&max_columns=480`;
+    if (start != null) fineLfUrl += `&start=${encodeURIComponent(start)}`;
     const finePromise = fetchJson(fineUrl).catch((err) => {
       console.error(err);
       return null;
     });
-    const [data, fineData] = await Promise.all([fetchJson(url), finePromise]);
+    const fineLfPromise = fetchJson(fineLfUrl).catch((err) => {
+      console.error(err);
+      return null;
+    });
+    const [data, fineData, fineLfData] = await Promise.all([
+      fetchJson(url),
+      finePromise,
+      fineLfPromise,
+    ]);
     if (reqId !== state.chartSpecReqId) return;
     state.chartSpectrogram = data;
     if (fineReqId === state.chartFineSpecReqId) {
       state.chartFineSpectrogram = fineData;
     }
+    if (fineLfReqId === state.chartFineLfSpecReqId) {
+      state.chartFineLfSpectrogram = fineLfData;
+    }
     state.specTooltipColTs = null;
     state.fineSpecTooltipColTs = null;
+    state.fineLfSpecTooltipColTs = null;
     if (state.display.limitFreqFilter) {
       applyHistoryDisplay({ refetchSpec: false });
     } else {
       drawChartSpectrogram();
       drawChartFineSpectrogram();
+      drawChartFineLfSpectrogram();
       drawChartExcess();
       renderChartAxisLabels();
       syncDisplayToggleUi();
@@ -3072,6 +3222,7 @@ function bindChartPan() {
   const excessCanvas = $("chartExcess");
   const specCanvas = $("chartSpectrogram");
   const fineSpecCanvas = $("chartFineSpectrogram");
+  const fineLfSpecCanvas = $("chartFineLfSpectrogram");
   if (!chartCanvas) return;
 
   let pointerId = null;
@@ -3086,13 +3237,17 @@ function bindChartPan() {
     excessCanvas?.classList.toggle("is-dragging", on);
     specCanvas?.classList.toggle("is-dragging", on);
     fineSpecCanvas?.classList.toggle("is-dragging", on);
+    fineLfSpecCanvas?.classList.toggle("is-dragging", on);
   };
 
   const endPan = (ev) => {
     if (pointerId == null || (ev && ev.pointerId !== pointerId)) return;
     const wasDragging = state.chartPanning;
     const wasSpecClick =
-      !moved && (activeEl === specCanvas || activeEl === fineSpecCanvas);
+      !moved &&
+      (activeEl === specCanvas ||
+        activeEl === fineSpecCanvas ||
+        activeEl === fineLfSpecCanvas);
     const clickX = ev?.clientX;
     const clickY = ev?.clientY;
     state.chartPanning = false;
@@ -3137,7 +3292,13 @@ function bindChartPan() {
       if (x < left || x > right || y < top || y > bottom) return;
     } else if (hitTest === "spec") {
       if (!chartSpecEnabled()) return;
-      if ($("chartSpecStrip")?.hidden && $("chartFineSpecStrip")?.hidden) return;
+      if (
+        $("chartSpecStrip")?.hidden &&
+        $("chartFineSpecStrip")?.hidden &&
+        $("chartFineLfSpecStrip")?.hidden
+      ) {
+        return;
+      }
     }
 
     pointerId = ev.pointerId;
@@ -3206,6 +3367,13 @@ function bindChartPan() {
     fineSpecCanvas.addEventListener("pointerup", endPan);
     fineSpecCanvas.addEventListener("pointercancel", endPan);
   }
+
+  if (fineLfSpecCanvas) {
+    fineLfSpecCanvas.addEventListener("pointerdown", (ev) => onDown(ev, "spec"));
+    fineLfSpecCanvas.addEventListener("pointermove", onMove);
+    fineLfSpecCanvas.addEventListener("pointerup", endPan);
+    fineLfSpecCanvas.addEventListener("pointercancel", endPan);
+  }
 }
 
 function bindChartCrosshair() {
@@ -3244,7 +3412,7 @@ function bindChartCrosshair() {
     const onSurface =
       !!plot ||
       !!ev.target.closest?.(
-        "#chart, #chartExcess, #chartSpectrogram, #chartFineSpectrogram, .chart-excess-body, .chart-spec-body, .chart-fine-spec-body, .chart-excess-y, .chart-spec-y, .chart-spec-canvas-wrap, .chart-axis-labels"
+        "#chart, #chartExcess, #chartSpectrogram, #chartFineSpectrogram, #chartFineLfSpectrogram, .chart-excess-body, .chart-spec-body, .chart-fine-spec-body, .chart-excess-y, .chart-spec-y, .chart-spec-canvas-wrap, .chart-axis-labels"
       );
     if (!onSurface) {
       hideChartCrosshair();
@@ -3256,14 +3424,21 @@ function bindChartCrosshair() {
       return;
     }
 
-    if (plot?.id === "fine") {
+    if (plot?.id === "fineLf") {
+      state.fineLfSpecFocusBand = fineLfSpecBandAtClientY(plot.clientY);
+      state.fineSpecFocusBand = null;
+      state.specFocusBand = null;
+    } else if (plot?.id === "fine") {
       state.fineSpecFocusBand = fineSpecBandAtClientY(plot.clientY);
+      state.fineLfSpecFocusBand = null;
       state.specFocusBand = null;
     } else if (plot?.id === "main") {
       state.specFocusBand = specBandAtClientY(plot.clientY);
       state.fineSpecFocusBand = null;
+      state.fineLfSpecFocusBand = null;
     } else {
       if (state.fineSpecFocusBand != null) state.fineSpecFocusBand = null;
+      if (state.fineLfSpecFocusBand != null) state.fineLfSpecFocusBand = null;
       if (state.specFocusBand != null) state.specFocusBand = null;
     }
 
@@ -3409,6 +3584,7 @@ function bind() {
   window.addEventListener("resize", () => {
     drawChartSpectrogram();
     drawChartFineSpectrogram();
+    drawChartFineLfSpectrogram();
     drawChartExcess();
     renderChartAxisLabels();
     layoutChartSpecStrip();

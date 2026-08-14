@@ -23,6 +23,10 @@ void HlukomerFineFft::setup() {
     const float freq = static_cast<float>(FINE_F0_HZ + i);
     this->coeff_[i] = 2.0f * cosf(two_pi * freq / static_cast<float>(FINE_FS));
   }
+  for (int i = 0; i < FINE_LF_N_BINS; i++) {
+    const float freq = static_cast<float>(FINE_LF_F0_HZ + i);
+    this->coeff_lf_[i] = 2.0f * cosf(two_pi * freq / static_cast<float>(FINE_FS));
+  }
 
   // passive=true: sdílí stream se sound_level_meter (nestartuje mic sám)
   this->mic_source_ = std::make_unique<microphone::MicrophoneSource>(
@@ -32,7 +36,8 @@ void HlukomerFineFft::setup() {
   this->mic_source_->add_data_callback(
       [this](const std::vector<uint8_t> &data) { this->on_audio_(data); });
 
-  ESP_LOGI(TAG, "Goertzel DFT %d–%d Hz (%d bins), integrate %ds", FINE_F0_HZ, FINE_F1_HZ, FINE_N_BINS,
+  ESP_LOGI(TAG, "Goertzel DFT %d–%d + %d–%d Hz (%d+%d bins), integrate %ds", FINE_F0_HZ,
+           FINE_F1_HZ, FINE_LF_F0_HZ, FINE_LF_F1_HZ, FINE_N_BINS, FINE_LF_N_BINS,
            FINE_INTEGRATE_FRAMES);
 }
 
@@ -78,6 +83,11 @@ void HlukomerFineFft::on_audio_(const std::vector<uint8_t> &data) {
       this->s_prev2_[b] = this->s_prev_[b];
       this->s_prev_[b] = s0;
     }
+    for (int b = 0; b < FINE_LF_N_BINS; b++) {
+      const float s0 = xw + this->coeff_lf_[b] * this->s_prev_lf_[b] - this->s_prev2_lf_[b];
+      this->s_prev2_lf_[b] = this->s_prev_lf_[b];
+      this->s_prev_lf_[b] = s0;
+    }
 
     this->sample_i_++;
     if (this->sample_i_ >= FINE_N_FFT) {
@@ -98,6 +108,17 @@ void HlukomerFineFft::finish_frame_() {
     this->s_prev_[b] = 0.0f;
     this->s_prev2_[b] = 0.0f;
   }
+  for (int b = 0; b < FINE_LF_N_BINS; b++) {
+    const float s0 = this->s_prev_lf_[b];
+    const float s1 = this->s_prev2_lf_[b];
+    const float c = this->coeff_lf_[b];
+    float power = s1 * s1 + s0 * s0 - c * s0 * s1;
+    if (power < 0.0f)
+      power = 0.0f;
+    this->power_acc_lf_[b] += power;
+    this->s_prev_lf_[b] = 0.0f;
+    this->s_prev2_lf_[b] = 0.0f;
+  }
   this->sample_i_ = 0;
   this->frames_ready_++;
   if (this->frames_ready_ >= FINE_INTEGRATE_FRAMES) {
@@ -110,15 +131,23 @@ void HlukomerFineFft::finish_frame_() {
       this->pending_db_[b] = db;
       this->power_acc_[b] = 0.0f;
     }
+    for (int b = 0; b < FINE_LF_N_BINS; b++) {
+      const float p = this->power_acc_lf_[b] * inv_frames / norm2;
+      const float db = 10.0f * log10f(p + 1e-20f) + this->spl_offset_;
+      this->pending_db_lf_[b] = db;
+      this->power_acc_lf_[b] = 0.0f;
+    }
     this->frames_ready_ = 0;
     this->post_pending_ = true;
   }
 }
 
-void HlukomerFineFft::maybe_post_() { this->post_json_(this->pending_db_); }
+void HlukomerFineFft::maybe_post_() {
+  this->post_json_(this->pending_db_, this->pending_db_lf_);
+}
 
-bool HlukomerFineFft::post_json_(const float *db) {
-  static char body[4096];
+bool HlukomerFineFft::post_json_(const float *db, const float *db_lf) {
+  static char body[6144];
   int pos = 0;
   pos += snprintf(body + pos, sizeof(body) - pos,
                   "{\"device_id\":\"%s\",\"kind\":\"spectrum_fine\",\"spectrum_fine\":[",
@@ -128,12 +157,25 @@ bool HlukomerFineFft::post_json_(const float *db) {
       return false;
     pos += snprintf(body + pos, sizeof(body) - pos, i ? ",%.1f" : "%.1f", static_cast<double>(db[i]));
   }
-  if (pos >= static_cast<int>(sizeof(body)) - 80)
+  if (pos >= static_cast<int>(sizeof(body)) - 200)
     return false;
   pos += snprintf(body + pos, sizeof(body) - pos,
                   "],\"spectrum_fine_meta\":{\"kind\":\"fft\",\"f0_hz\":%d,\"f1_hz\":%d,"
-                  "\"df_hz\":1.0,\"n_fft\":%d,\"window\":\"hann\",\"integrate_s\":%d}}",
+                  "\"df_hz\":1.0,\"n_fft\":%d,\"window\":\"hann\",\"integrate_s\":%d},"
+                  "\"spectrum_fine_lf\":[",
                   FINE_F0_HZ, FINE_F1_HZ, FINE_N_FFT, FINE_INTEGRATE_FRAMES);
+  for (int i = 0; i < FINE_LF_N_BINS; i++) {
+    if (pos >= static_cast<int>(sizeof(body)) - 16)
+      return false;
+    pos +=
+        snprintf(body + pos, sizeof(body) - pos, i ? ",%.1f" : "%.1f", static_cast<double>(db_lf[i]));
+  }
+  if (pos >= static_cast<int>(sizeof(body)) - 120)
+    return false;
+  pos += snprintf(body + pos, sizeof(body) - pos,
+                  "],\"spectrum_fine_lf_meta\":{\"kind\":\"fft\",\"f0_hz\":%d,\"f1_hz\":%d,"
+                  "\"df_hz\":1.0,\"n_fft\":%d,\"window\":\"hann\",\"integrate_s\":%d}}",
+                  FINE_LF_F0_HZ, FINE_LF_F1_HZ, FINE_N_FFT, FINE_INTEGRATE_FRAMES);
 
   esp_http_client_config_t config = {};
   config.url = this->api_url_.c_str();
@@ -157,7 +199,7 @@ bool HlukomerFineFft::post_json_(const float *db) {
     ESP_LOGW(TAG, "POST failed err=%s status=%d", esp_err_to_name(err), status);
     return false;
   }
-  ESP_LOGD(TAG, "Posted fine FFT (%d bins)", FINE_N_BINS);
+  ESP_LOGD(TAG, "Posted fine FFT (%d + %d bins)", FINE_N_BINS, FINE_LF_N_BINS);
   return true;
 }
 

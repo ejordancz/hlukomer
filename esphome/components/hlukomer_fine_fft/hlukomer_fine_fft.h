@@ -14,11 +14,17 @@ namespace hlukomer_fine_fft {
 static const int FINE_F0_HZ = 190;
 static const int FINE_F1_HZ = 270;
 static const int FINE_N_BINS = FINE_F1_HZ - FINE_F0_HZ + 1;  // 81
+
+/** Low-band fine FFT: 25–70 Hz (1/3-oktáva floor … under mains/HVAC tones). */
+static const int FINE_LF_F0_HZ = 25;
+static const int FINE_LF_F1_HZ = 70;
+static const int FINE_LF_N_BINS = FINE_LF_F1_HZ - FINE_LF_F0_HZ + 1;  // 46
+
 static const int FINE_FS = 48000;
 static const int FINE_N_FFT = 48000;  // Δf = 1 Hz
 static const int FINE_INTEGRATE_FRAMES = 3;
 
-/** High-res 190–270 Hz: Goertzel DFT bins (≡ FFT bins) + Hann, 3 s energy avg → HTTP. */
+/** High-res 190–270 + 25–70 Hz: Goertzel DFT bins (≡ FFT bins) + Hann, 3 s energy avg → HTTP. */
 class HlukomerFineFft : public Component {
  public:
   void set_microphone(microphone::Microphone *mic) { this->mic_ = mic; }
@@ -37,7 +43,7 @@ class HlukomerFineFft : public Component {
   void on_audio_(const std::vector<uint8_t> &data);
   void finish_frame_();
   void maybe_post_();
-  bool post_json_(const float *db);
+  bool post_json_(const float *db, const float *db_lf);
 
   microphone::Microphone *mic_{nullptr};
   std::unique_ptr<microphone::MicrophoneSource> mic_source_;
@@ -52,10 +58,17 @@ class HlukomerFineFft : public Component {
   float s_prev_[FINE_N_BINS]{};
   float s_prev2_[FINE_N_BINS]{};
   float power_acc_[FINE_N_BINS]{};
+
+  float coeff_lf_[FINE_LF_N_BINS]{};
+  float s_prev_lf_[FINE_LF_N_BINS]{};
+  float s_prev2_lf_[FINE_LF_N_BINS]{};
+  float power_acc_lf_[FINE_LF_N_BINS]{};
+
   int sample_i_{0};
   int frames_ready_{0};
   bool post_pending_{false};
   float pending_db_[FINE_N_BINS]{};
+  float pending_db_lf_[FINE_LF_N_BINS]{};
 };
 
 }  // namespace hlukomer_fine_fft

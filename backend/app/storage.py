@@ -56,6 +56,15 @@ FINE_FFT_BANDS: tuple[str, ...] = tuple(str(hz) for hz in FINE_FFT_HZ)
 FINE_FFT_DB0 = 0.0
 FINE_FFT_DB_STEP = 0.5
 
+# High-res FFT 25–70 Hz (same packing / 3 s → spectrum_fine_lf_3s; oddělená historie).
+FINE_LF_FFT_F0_HZ = 25
+FINE_LF_FFT_F1_HZ = 70
+FINE_LF_FFT_N_BINS = FINE_LF_FFT_F1_HZ - FINE_LF_FFT_F0_HZ + 1  # 46
+FINE_LF_FFT_HZ: tuple[int, ...] = tuple(
+    range(FINE_LF_FFT_F0_HZ, FINE_LF_FFT_F1_HZ + 1, int(FINE_FFT_DF_HZ))
+)
+FINE_LF_FFT_BANDS: tuple[str, ...] = tuple(str(hz) for hz in FINE_LF_FFT_HZ)
+
 # Staré IIR wide sloupce (drop bez náhrady).
 LEGACY_FINE_COLS: tuple[str, ...] = tuple(
     f"fine_{hz}" for hz in range(190, 271, 5)
@@ -154,6 +163,16 @@ def ensure_fine_fft_table(conn: sqlite3.Connection) -> None:
             ts REAL NOT NULL,
             n_bins INTEGER NOT NULL DEFAULT 81,
             f0_hz REAL NOT NULL DEFAULT 190,
+            df_hz REAL NOT NULL DEFAULT 1,
+            db0 REAL NOT NULL DEFAULT 0,
+            payload BLOB NOT NULL,
+            PRIMARY KEY (device_id, ts)
+        ) WITHOUT ROWID;
+        CREATE TABLE IF NOT EXISTS spectrum_fine_lf_3s (
+            device_id TEXT NOT NULL,
+            ts REAL NOT NULL,
+            n_bins INTEGER NOT NULL DEFAULT 46,
+            f0_hz REAL NOT NULL DEFAULT 25,
             df_hz REAL NOT NULL DEFAULT 1,
             db0 REAL NOT NULL DEFAULT 0,
             payload BLOB NOT NULL,
@@ -351,10 +370,12 @@ def pack_fine_fft_payload(
     *,
     db0: float = FINE_FFT_DB0,
     step: float = FINE_FFT_DB_STEP,
+    n_bins: Optional[int] = None,
 ) -> bytes:
-    if len(values_db) != FINE_FFT_N_BINS:
-        raise ValueError(f"expected {FINE_FFT_N_BINS} bins, got {len(values_db)}")
-    out = bytearray(FINE_FFT_N_BINS)
+    expected = FINE_FFT_N_BINS if n_bins is None else int(n_bins)
+    if len(values_db) != expected:
+        raise ValueError(f"expected {expected} bins, got {len(values_db)}")
+    out = bytearray(expected)
     for i, raw in enumerate(values_db):
         v = sanitize_value(float(raw))
         if v is None:
@@ -393,7 +414,7 @@ def upsert_spectrum_fine_3s(
     if len(values_db) != FINE_FFT_N_BINS:
         raise ValueError(f"spectrum_fine must have {FINE_FFT_N_BINS} values")
     bucket = fine_fft_bucket_start(ts)
-    payload = pack_fine_fft_payload(values_db, db0=db0)
+    payload = pack_fine_fft_payload(values_db, db0=db0, n_bins=FINE_FFT_N_BINS)
     conn.execute(
         """
         INSERT INTO spectrum_fine_3s
@@ -419,19 +440,61 @@ def upsert_spectrum_fine_3s(
     return 1
 
 
-def fetch_spectrum_fine_columns_raw(
+def upsert_spectrum_fine_lf_3s(
     conn: sqlite3.Connection,
+    ts: float,
+    device_id: str,
+    values_db: list[float],
+    *,
+    f0_hz: float = float(FINE_LF_FFT_F0_HZ),
+    df_hz: float = FINE_FFT_DF_HZ,
+    db0: float = FINE_FFT_DB0,
+) -> int:
+    if len(values_db) != FINE_LF_FFT_N_BINS:
+        raise ValueError(f"spectrum_fine_lf must have {FINE_LF_FFT_N_BINS} values")
+    bucket = fine_fft_bucket_start(ts)
+    payload = pack_fine_fft_payload(values_db, db0=db0, n_bins=FINE_LF_FFT_N_BINS)
+    conn.execute(
+        """
+        INSERT INTO spectrum_fine_lf_3s
+            (device_id, ts, n_bins, f0_hz, df_hz, db0, payload)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(device_id, ts) DO UPDATE SET
+            n_bins = excluded.n_bins,
+            f0_hz = excluded.f0_hz,
+            df_hz = excluded.df_hz,
+            db0 = excluded.db0,
+            payload = excluded.payload
+        """,
+        (
+            device_id,
+            bucket,
+            FINE_LF_FFT_N_BINS,
+            f0_hz,
+            df_hz,
+            db0,
+            payload,
+        ),
+    )
+    return 1
+
+
+def _fetch_fine_fft_columns_raw(
+    conn: sqlite3.Connection,
+    table: str,
     device_id: str,
     t_start: float,
     t_end: float,
+    *,
+    expected_bins: int,
 ) -> list[tuple[float, list[float]]]:
-    """(t_mid, values_db[81]) z spectrum_fine_3s; t_mid = bucket_start + 1.5 s."""
-    if not table_exists(conn, "spectrum_fine_3s"):
+    """(t_mid, values_db) z fine FFT tabulky; t_mid = bucket_start + 1.5 s."""
+    if not table_exists(conn, table):
         return []
     rows = conn.execute(
-        """
+        f"""
         SELECT ts, n_bins, db0, payload
-        FROM spectrum_fine_3s
+        FROM {table}
         WHERE device_id = ? AND ts >= ? AND ts <= ?
         ORDER BY ts ASC
         """,
@@ -444,7 +507,7 @@ def fetch_spectrum_fine_columns_raw(
         t_mid = ts0 + half
         if ts0 + FINE_FFT_INTEGRATE_S < t_start or ts0 > t_end:
             continue
-        n_bins = int(r["n_bins"] or FINE_FFT_N_BINS)
+        n_bins = int(r["n_bins"] or expected_bins)
         db0 = float(r["db0"] if r["db0"] is not None else FINE_FFT_DB0)
         payload = r["payload"]
         if payload is None:
@@ -456,13 +519,47 @@ def fetch_spectrum_fine_columns_raw(
         if len(payload) < n_bins:
             continue
         vals = unpack_fine_fft_payload(payload, db0=db0, n_bins=n_bins)
-        if len(vals) < FINE_FFT_N_BINS:
+        if len(vals) < expected_bins:
             pad = vals[-1] if vals else 0.0
-            vals = vals + [pad] * (FINE_FFT_N_BINS - len(vals))
-        elif len(vals) > FINE_FFT_N_BINS:
-            vals = vals[:FINE_FFT_N_BINS]
+            vals = vals + [pad] * (expected_bins - len(vals))
+        elif len(vals) > expected_bins:
+            vals = vals[:expected_bins]
         out.append((t_mid, vals))
     return out
+
+
+def fetch_spectrum_fine_columns_raw(
+    conn: sqlite3.Connection,
+    device_id: str,
+    t_start: float,
+    t_end: float,
+) -> list[tuple[float, list[float]]]:
+    """(t_mid, values_db[81]) z spectrum_fine_3s; t_mid = bucket_start + 1.5 s."""
+    return _fetch_fine_fft_columns_raw(
+        conn,
+        "spectrum_fine_3s",
+        device_id,
+        t_start,
+        t_end,
+        expected_bins=FINE_FFT_N_BINS,
+    )
+
+
+def fetch_spectrum_fine_lf_columns_raw(
+    conn: sqlite3.Connection,
+    device_id: str,
+    t_start: float,
+    t_end: float,
+) -> list[tuple[float, list[float]]]:
+    """(t_mid, values_db[46]) z spectrum_fine_lf_3s; t_mid = bucket_start + 1.5 s."""
+    return _fetch_fine_fft_columns_raw(
+        conn,
+        "spectrum_fine_lf_3s",
+        device_id,
+        t_start,
+        t_end,
+        expected_bins=FINE_LF_FFT_N_BINS,
+    )
 
 
 def latest_row_1s(
@@ -771,6 +868,8 @@ def prune_storage(
     conn.execute("DELETE FROM samples_1s WHERE ts < ?", (cutoff_all,))
     if table_exists(conn, "spectrum_fine_3s"):
         conn.execute("DELETE FROM spectrum_fine_3s WHERE ts < ?", (cutoff_all,))
+    if table_exists(conn, "spectrum_fine_lf_3s"):
+        conn.execute("DELETE FROM spectrum_fine_lf_3s WHERE ts < ?", (cutoff_all,))
     conn.execute("DELETE FROM weather_snapshots WHERE ts < ?", (cutoff_all,))
     if aircraft_cutoff is not None:
         conn.execute(
@@ -796,6 +895,7 @@ def storage_status(conn: sqlite3.Connection) -> dict[str, Any]:
             "samples_5s": count("samples_5s"),
             "samples_minute": count("samples_minute"),
             "spectrum_fine_3s": count("spectrum_fine_3s"),
+            "spectrum_fine_lf_3s": count("spectrum_fine_lf_3s"),
         },
     }
 
