@@ -1295,7 +1295,6 @@ main {
    Kompaktní heatmapa (4 px / Hz); Y popisky každých 5 Hz. */
 .chart-spec-y.chart-fine-spec-y {
   height: auto;
-  min-height: 20.25rem; /* 81 × 4 px */
   justify-content: flex-start;
 }
 
@@ -1310,7 +1309,16 @@ main {
 
 .chart-spec-canvas-wrap.chart-fine-spec-canvas-wrap {
   height: auto;
-  min-height: 20.25rem;
+}
+
+#chartFineSpecStrip .chart-spec-y.chart-fine-spec-y,
+#chartFineSpecStrip .chart-spec-canvas-wrap.chart-fine-spec-canvas-wrap {
+  min-height: 20.25rem; /* 81 × 4 px */
+}
+
+#chartFineLfSpecStrip .chart-spec-y.chart-fine-spec-y,
+#chartFineLfSpecStrip .chart-spec-canvas-wrap.chart-fine-spec-canvas-wrap {
+  min-height: 11.5rem; /* 46 × 4 px — nesdílet výšku 190–270 Hz */
 }
 
 .chart-spec-bars {
