@@ -2328,8 +2328,9 @@ body.spec-pointer-hover * {
 
 @media (max-width: 700px) {
   .live-stage {
-    padding: 5rem 0 4rem;
-    min-height: 100dvh;
+    padding: 1.15rem 0 4rem;
+    min-height: auto;
+    justify-content: flex-start;
   }
 
   .live-b {
@@ -2367,7 +2368,8 @@ body.spec-pointer-hover * {
   }
 
   .top {
-    padding-inline: 1rem;
+    position: relative;
+    padding: 1rem 1rem 0.65rem;
     align-items: start;
     grid-template-columns: 1fr auto;
     grid-template-areas:
