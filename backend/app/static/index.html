@@ -9,7 +9,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,700&family=IBM+Plex+Mono:wght@400;500&family=Sora:wght@400;500;600&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/static/style.css?v=96" />
+  <link rel="stylesheet" href="/static/style.css?v=97" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@mdi/font@7.4.47/css/materialdesignicons.min.css" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.9/dist/chart.umd.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
@@ -122,48 +122,127 @@
       </header>
 
       <section class="controls chart-controls">
-        <label>
-          Rozsah grafu
-          <select id="rangeSelect">
-            <option value="0.1667">10 minut</option>
-            <option value="1">1 hodina</option>
-            <option value="6" selected>6 hodin</option>
-            <option value="12">12 hodin</option>
-            <option value="24">24 hodin</option>
-            <option value="48">2 dny</option>
-            <option value="168">7 dní</option>
-            <option value="720">30 dní</option>
-            <option value="custom">Vlastní</option>
-          </select>
-        </label>
-        <div class="custom-range" id="customRange" hidden>
+        <div class="chart-controls-main">
           <label>
-            Od
-            <span class="datetime-pair">
-              <input type="date" id="rangeFromDate" />
-              <input type="time" id="rangeFromTime" step="60" />
-            </span>
+            Rozsah grafu
+            <select id="rangeSelect">
+              <option value="0.1667">10 minut</option>
+              <option value="1">1 hodina</option>
+              <option value="6" selected>6 hodin</option>
+              <option value="12">12 hodin</option>
+              <option value="24">24 hodin</option>
+              <option value="48">2 dny</option>
+              <option value="168">7 dní</option>
+              <option value="720">30 dní</option>
+              <option value="custom">Vlastní</option>
+            </select>
           </label>
+          <div class="custom-range" id="customRange" hidden>
+            <label>
+              Od
+              <span class="datetime-pair">
+                <input type="date" id="rangeFromDate" />
+                <input type="time" id="rangeFromTime" step="60" />
+              </span>
+            </label>
+            <label>
+              Do
+              <span class="datetime-pair">
+                <input type="date" id="rangeToDate" />
+                <input type="time" id="rangeToTime" step="60" />
+              </span>
+            </label>
+          </div>
           <label>
-            Do
-            <span class="datetime-pair">
-              <input type="date" id="rangeToDate" />
-              <input type="time" id="rangeToTime" step="60" />
-            </span>
+            Metrika
+            <select id="metricSelect">
+              <option value="laeq_1s">LAeq 1s (živě)</option>
+              <option value="laeq_1min" selected>LAeq 1min</option>
+              <option value="lamax_1min">LAmax 1min</option>
+              <option value="lamin_1min">LAmin 1min</option>
+            </select>
           </label>
+          <button type="button" class="ghost-btn is-active" id="chartLiveBtn" aria-pressed="true" title="Vrátit graf k aktuálnímu času">
+            Živě
+          </button>
         </div>
-        <label>
-          Metrika
-          <select id="metricSelect">
-            <option value="laeq_1s">LAeq 1s (živě)</option>
-            <option value="laeq_1min" selected>LAeq 1min</option>
-            <option value="lamax_1min">LAmax 1min</option>
-            <option value="lamin_1min">LAmin 1min</option>
-          </select>
-        </label>
-        <button type="button" class="ghost-btn is-active" id="chartLiveBtn" aria-pressed="true" title="Vrátit graf k aktuálnímu času">
-          Živě
-        </button>
+        <div class="chart-vis-toggles" id="chartVisToggles">
+          <div class="display-toggle chart-vis-toggle" data-chart="laeq">
+            <div class="pill-switch-wrap">
+              <button
+                type="button"
+                class="pill-switch"
+                id="switchChartLaeq"
+                role="switch"
+                aria-checked="true"
+                aria-labelledby="labelChartLaeq"
+              >
+                <span class="pill-switch-thumb" aria-hidden="true"></span>
+              </button>
+            </div>
+            <span class="display-toggle-label" id="labelChartLaeq">Průběh LAeq</span>
+          </div>
+          <div class="display-toggle chart-vis-toggle" data-chart="excess">
+            <div class="pill-switch-wrap">
+              <button
+                type="button"
+                class="pill-switch"
+                id="switchChartExcess"
+                role="switch"
+                aria-checked="true"
+                aria-labelledby="labelChartExcess"
+              >
+                <span class="pill-switch-thumb" aria-hidden="true"></span>
+              </button>
+            </div>
+            <span class="display-toggle-label" id="labelChartExcess">Překročení limitu</span>
+          </div>
+          <div class="display-toggle chart-vis-toggle" data-chart="spec">
+            <div class="pill-switch-wrap">
+              <button
+                type="button"
+                class="pill-switch"
+                id="switchChartSpec"
+                role="switch"
+                aria-checked="true"
+                aria-labelledby="labelChartSpec"
+              >
+                <span class="pill-switch-thumb" aria-hidden="true"></span>
+              </button>
+            </div>
+            <span class="display-toggle-label" id="labelChartSpec">Spektrogram 1/3 oktávy</span>
+          </div>
+          <div class="display-toggle chart-vis-toggle" data-chart="fine">
+            <div class="pill-switch-wrap">
+              <button
+                type="button"
+                class="pill-switch"
+                id="switchChartFine"
+                role="switch"
+                aria-checked="true"
+                aria-labelledby="labelChartFine"
+              >
+                <span class="pill-switch-thumb" aria-hidden="true"></span>
+              </button>
+            </div>
+            <span class="display-toggle-label" id="labelChartFine">Spektrogram 190–270 Hz</span>
+          </div>
+          <div class="display-toggle chart-vis-toggle" data-chart="finelf">
+            <div class="pill-switch-wrap">
+              <button
+                type="button"
+                class="pill-switch"
+                id="switchChartFineLf"
+                role="switch"
+                aria-checked="true"
+                aria-labelledby="labelChartFineLf"
+              >
+                <span class="pill-switch-thumb" aria-hidden="true"></span>
+              </button>
+            </div>
+            <span class="display-toggle-label" id="labelChartFineLf">Spektrogram 25–70 Hz</span>
+          </div>
+        </div>
       </section>
 
       <div class="stats" id="stats" aria-label="Souhrn viditelného rozsahu">
@@ -191,16 +270,19 @@
 
       <section class="chart-wrap">
         <div class="chart-stack" id="chartStack">
-          <div class="chart-laeq-head">
-            <p class="chart-pane-title">Průběh LAeq</p>
-            <div class="chart-legend" aria-hidden="true">
-              <span class="chart-legend-item"><span class="swatch day"></span>den</span>
-              <span class="chart-legend-item"><span class="swatch night"></span>noc</span>
-              <span class="chart-legend-item"><span class="swatch limit"></span>limit</span>
-              <span class="chart-legend-item" id="legendAircraft"><span class="swatch aircraft" aria-hidden="true"><span class="mdi mdi-airplane"></span></span>přelet</span>
+          <div class="chart-laeq-strip" id="chartLaeqStrip">
+            <div class="chart-laeq-head">
+              <p class="chart-pane-title">Průběh LAeq</p>
+              <div class="chart-legend" aria-hidden="true">
+                <span class="chart-legend-item"><span class="swatch day"></span>den</span>
+                <span class="chart-legend-item"><span class="swatch night"></span>noc</span>
+                <span class="chart-legend-item"><span class="swatch limit"></span>limit</span>
+                <span class="chart-legend-item" id="legendAircraft"><span class="swatch aircraft" aria-hidden="true"><span class="mdi mdi-airplane"></span></span>přelet</span>
+              </div>
             </div>
+            <canvas id="chart" height="120"></canvas>
+            <div class="chart-axis-labels" aria-hidden="true"></div>
           </div>
-          <canvas id="chart" height="120"></canvas>
           <div class="chart-excess-strip" id="chartExcessStrip">
             <p class="chart-pane-title">Překročení limitu</p>
             <div class="chart-excess-body">
@@ -212,6 +294,7 @@
                 </div>
               </div>
             </div>
+            <div class="chart-axis-labels" aria-hidden="true"></div>
           </div>
           <div class="chart-spec-strip" id="chartSpecStrip" hidden>
             <div class="chart-spec-head">
@@ -241,6 +324,7 @@
                 </div>
               </div>
             </div>
+            <div class="chart-axis-labels" aria-hidden="true"></div>
           </div>
           <div class="chart-spec-strip chart-fine-spec-strip" id="chartFineSpecStrip" hidden>
             <p class="chart-pane-title">Spektrogram 190–270 Hz</p>
@@ -258,6 +342,7 @@
                 </div>
               </div>
             </div>
+            <div class="chart-axis-labels" aria-hidden="true"></div>
           </div>
           <div class="chart-spec-strip chart-fine-spec-strip" id="chartFineLfSpecStrip" hidden>
             <p class="chart-pane-title">Spektrogram 25–70 Hz</p>
@@ -275,11 +360,11 @@
                 </div>
               </div>
             </div>
+            <div class="chart-axis-labels" aria-hidden="true"></div>
           </div>
           <p class="chart-spec-unavailable" id="chartSpecUnavailable" hidden role="status">
             Spektrogram se zobrazuje pouze pro rozsah do 48 hodin.
           </p>
-          <div class="chart-axis-labels" id="chartAxisLabels" hidden aria-hidden="true"></div>
         </div>
         <div id="aircraftPopup" class="aircraft-popup" hidden role="dialog" aria-modal="false" aria-label="Detail přeletu"></div>
         <div class="chart-context" id="chartContext">
@@ -421,6 +506,6 @@
     </span>
   </button>
 
-  <script src="/static/app.js?v=89"></script>
+  <script src="/static/app.js?v=90"></script>
 </body>
 </html>

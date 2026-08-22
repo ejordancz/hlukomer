@@ -987,6 +987,39 @@ main {
   margin: 0 0 1.35rem;
 }
 
+.controls.chart-controls {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.85rem;
+}
+
+.chart-controls-main {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1.15rem 1.35rem;
+}
+
+.chart-vis-toggles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem 0.55rem;
+  width: 100%;
+}
+
+.chart-vis-toggle {
+  max-width: none;
+  padding: 0.42rem 0.65rem 0.42rem 0.7rem;
+  cursor: pointer;
+}
+
+.chart-vis-toggle .display-toggle-label {
+  font-size: 0.74rem;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--muted);
+  cursor: pointer;
+}
+
 .controls label {
   display: flex;
   flex-direction: column;
@@ -1053,7 +1086,7 @@ main {
   display: none;
 }
 
-.chart-controls .ghost-btn {
+.chart-controls-main .ghost-btn {
   align-self: flex-end;
   margin-bottom: 0.1rem;
 }
@@ -1115,6 +1148,19 @@ main {
 
 .chart-stack > .chart-pane-title {
   margin: 0 0 0.3rem;
+}
+
+.chart-laeq-strip {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  width: 100%;
+}
+
+.chart-laeq-strip[hidden],
+.chart-excess-strip[hidden] {
+  display: none;
 }
 
 .chart-laeq-head {
@@ -1514,7 +1560,7 @@ main {
   position: relative;
   box-sizing: border-box;
   height: 1.35rem;
-  margin: 0.2rem 0 0.05rem;
+  margin: 0.2rem 0 0.35rem;
   font-family: var(--font-mono);
   font-size: 0.72rem;
   color: var(--muted);
@@ -1523,6 +1569,12 @@ main {
 
 .chart-axis-labels[hidden] {
   display: none;
+}
+
+.chart-laeq-strip > .chart-axis-labels,
+.chart-excess-strip > .chart-axis-labels,
+.chart-spec-strip > .chart-axis-labels {
+  margin-bottom: 0.15rem;
 }
 
 .chart-axis-labels span {
@@ -1746,8 +1798,8 @@ body.spec-pointer-hover * {
   }
 }
 
-.chart-stack.has-spec #chart {
-  margin-bottom: 0.2rem;
+.chart-laeq-strip #chart {
+  margin-bottom: 0.05rem;
 }
 
 .chart-wrap {
