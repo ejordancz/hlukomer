@@ -9,10 +9,11 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,700&family=IBM+Plex+Mono:wght@400;500&family=Sora:wght@400;500;600&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/static/style.css?v=97" />
+  <link rel="stylesheet" href="/static/style.css?v=101" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@mdi/font@7.4.47/css/materialdesignicons.min.css" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.9/dist/chart.umd.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.1/build/qrcode.min.js"></script>
   <!-- TRACKER_SCRIPT -->
   <!-- DISPLAY_CONFIG -->
 </head>
@@ -119,6 +120,10 @@
     <section class="history" id="history" aria-label="Historie měření">
       <header class="history-head">
         <p class="section-kicker">Historie</p>
+        <button type="button" class="history-export-btn" id="historyExportBtn">
+          <span class="mdi mdi-image-outline" aria-hidden="true"></span>
+          Export
+        </button>
       </header>
 
       <section class="controls chart-controls">
@@ -241,6 +246,30 @@
               </button>
             </div>
             <span class="display-toggle-label" id="labelChartFineLf">Spektrogram 25–70 Hz</span>
+          </div>
+        </div>
+        <div class="chart-vis-toggles" id="chartFilterToggles">
+          <div class="display-toggle chart-vis-toggle" data-switch="limitFreq">
+            <div class="pill-switch-wrap">
+              <button
+                type="button"
+                class="pill-switch"
+                id="switchLimitFreq"
+                role="switch"
+                aria-checked="false"
+                aria-labelledby="labelLimitFreq"
+                aria-describedby="descLimitFreq"
+              >
+                <span class="pill-switch-thumb" aria-hidden="true"></span>
+              </button>
+            </div>
+            <span class="display-toggle-label" id="labelLimitFreq">Odstranění šumu</span>
+            <div class="display-toggle-tip" id="tipLimitFreq" role="tooltip">
+              Ignoruje úseky, kde není dominantní 25 / 200 / 250 Hz (typicky VZT), a krátké peaky mimo běžný hluk. Šedé překročení se do statistiky nezapočítá.
+            </div>
+            <span class="visually-hidden" id="descLimitFreq">
+              Ignoruje úseky, kde není dominantní 25 / 200 / 250 Hz (typicky VZT), a krátké peaky mimo běžný hluk. Šedé překročení se do statistiky nezapočítá.
+            </span>
           </div>
         </div>
       </section>
@@ -466,28 +495,6 @@
           Sníží hygienické limity o 5 dB. Zapněte, pokud hluk obsahuje výrazný otravný tón (např. hučení na jedné frekvenci z větrání či čerpadla).
         </span>
       </div>
-      <div class="display-toggle" data-switch="limitFreq">
-        <div class="pill-switch-wrap">
-          <button
-            type="button"
-            class="pill-switch"
-            id="switchLimitFreq"
-            role="switch"
-            aria-checked="false"
-            aria-labelledby="labelLimitFreq"
-            aria-describedby="descLimitFreq"
-          >
-            <span class="pill-switch-thumb" aria-hidden="true"></span>
-          </button>
-        </div>
-        <span class="display-toggle-label" id="labelLimitFreq">Odstranění šumu</span>
-        <div class="display-toggle-tip" id="tipLimitFreq" role="tooltip">
-          Ignoruje úseky, kde není dominantní 25 / 200 / 250 Hz (typicky VZT), a krátké peaky mimo běžný hluk. Šedé překročení se do statistiky nezapočítá.
-        </div>
-        <span class="visually-hidden" id="descLimitFreq">
-          Ignoruje úseky, kde není dominantní 25 / 200 / 250 Hz (typicky VZT), a krátké peaky mimo běžný hluk. Šedé překročení se do statistiky nezapočítá.
-        </span>
-      </div>
     </div>
   </div>
   <button
@@ -506,6 +513,6 @@
     </span>
   </button>
 
-  <script src="/static/app.js?v=90"></script>
+  <script src="/static/app.js?v=98"></script>
 </body>
 </html>

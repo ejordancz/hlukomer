@@ -124,6 +124,17 @@ const METRIC_SELECT_VALUES = new Set([
   "lamax_1min",
   "lamin_1min",
 ]);
+const URL_FILTER_KEYS = [
+  "range",
+  "metric",
+  "live",
+  "from",
+  "to",
+  "charts",
+  "window",
+  "tonal",
+  "noise",
+];
 
 function readLsBool(key, defaultOn = true) {
   try {
@@ -391,6 +402,19 @@ function parseBoolParam(v, fallback) {
   if (s === "1" || s === "true" || s === "on" || s === "yes") return true;
   if (s === "0" || s === "false" || s === "off" || s === "no") return false;
   return fallback;
+}
+
+function urlHasFilterParams(search = location.search) {
+  const q = new URLSearchParams(search);
+  return URL_FILTER_KEYS.some((k) => q.has(k));
+}
+
+function scrollToHistory() {
+  const el = $("stats") || $("history");
+  if (!el) return;
+  const go = () => el.scrollIntoView({ block: "start", behavior: "auto" });
+  go();
+  requestAnimationFrame(go);
 }
 
 function applyUrlFilters() {
@@ -1100,7 +1124,7 @@ function syncDisplayToggleUi() {
   if (st) st.setAttribute("aria-checked", state.display.tonalPenalty ? "true" : "false");
   if (sf) sf.setAttribute("aria-checked", state.display.limitFreqFilter ? "true" : "false");
 
-  document.querySelectorAll("#displayToggles .display-toggle").forEach((row) => {
+  document.querySelectorAll(".display-toggle[data-switch]").forEach((row) => {
     const kind = row.getAttribute("data-switch");
     let on = false;
     if (kind === "window") on = !!state.display.windowCorr;
@@ -1110,10 +1134,7 @@ function syncDisplayToggleUi() {
   });
 
   const fab = $("settingsFab");
-  const anyActive =
-    state.display.windowCorr ||
-    state.display.tonalPenalty ||
-    state.display.limitFreqFilter;
+  const anyActive = state.display.windowCorr || state.display.tonalPenalty;
   fab?.classList.toggle("has-active", !!anyActive);
 
   const wDb = state.display.windowDb;
@@ -1355,6 +1376,27 @@ function applyHistoryDisplay({ refetchSpec = true } = {}) {
 /** Jednotný formát data: DD.MM.YY */
 function fmtDateDMY(d) {
   return `${pad2(d.getDate())}.${pad2(d.getMonth() + 1)}.${pad2(d.getFullYear() % 100)}`;
+}
+
+/** Datum s plným rokem (export / sdílení). */
+function fmtDateFull(d) {
+  return `${pad2(d.getDate())}.${pad2(d.getMonth() + 1)}.${d.getFullYear()}`;
+}
+
+function fmtDateTimeFull(tsSec, { withSeconds = false } = {}) {
+  const d = new Date(tsSec * 1000);
+  return `${fmtDateFull(d)} ${fmtClock(d, { withSeconds })}`;
+}
+
+function fmtMeasureRange(t0, t1) {
+  const a = new Date(t0 * 1000);
+  const b = new Date(t1 * 1000);
+  const sameDay =
+    a.getFullYear() === b.getFullYear() &&
+    a.getMonth() === b.getMonth() &&
+    a.getDate() === b.getDate();
+  if (sameDay) return `${fmtDateFull(a)} ${fmtClock(a)} – ${fmtClock(b)}`;
+  return `${fmtDateFull(a)} ${fmtClock(a)} – ${fmtDateFull(b)} ${fmtClock(b)}`;
 }
 
 /** Čas HH:mm nebo HH:mm:ss (24h). */
@@ -3708,6 +3750,515 @@ function applyCustomRangeFromInputs() {
   refreshHistory();
 }
 
+const HISTORY_EXPORT_PANES = [
+  { key: "laeq", canvasId: "chart", stripId: "chartLaeqStrip" },
+  {
+    key: "excess",
+    canvasId: "chartExcess",
+    stripId: "chartExcessStrip",
+    yElId: "chartExcessYLabels",
+  },
+  {
+    key: "spec",
+    canvasId: "chartSpectrogram",
+    stripId: "chartSpecStrip",
+    yElId: "chartSpecYLabels",
+  },
+  {
+    key: "fine",
+    canvasId: "chartFineSpectrogram",
+    stripId: "chartFineSpecStrip",
+    yElId: "chartFineSpecYLabels",
+  },
+  {
+    key: "finelf",
+    canvasId: "chartFineLfSpectrogram",
+    stripId: "chartFineLfSpecStrip",
+    yElId: "chartFineLfSpecYLabels",
+  },
+];
+
+function visibleHistoryExportPanes() {
+  return HISTORY_EXPORT_PANES.filter((pane) => {
+    const strip = $(pane.stripId);
+    const canvas = $(pane.canvasId);
+    return strip && !strip.hidden && canvas && canvas.width > 0 && canvas.height > 0;
+  });
+}
+
+function historyShareUrl() {
+  writeUrlFilters();
+  const url = new URL(location.href);
+  const { t0, t1 } = selectedHistoryRange();
+  url.searchParams.set("live", "0");
+  url.searchParams.set("from", formatTimeParam(t0));
+  url.searchParams.set("to", formatTimeParam(t1));
+  if (isCustomRange()) url.searchParams.set("range", "custom");
+  url.hash = "stats";
+  return url.toString();
+}
+
+function yLabelsFromEl(id) {
+  const el = $(id);
+  if (!el) return [];
+  return [...el.querySelectorAll("span")].map((s) => (s.textContent || "").trim());
+}
+
+function drawExportYLabels(ctx, labels, xRight, y0, h, scale) {
+  const n = labels.length;
+  if (!n) return;
+  ctx.save();
+  ctx.fillStyle = "#a8bab2";
+  ctx.font = `${11 * scale}px "IBM Plex Mono", ui-monospace, monospace`;
+  ctx.textAlign = "right";
+  for (let i = 0; i < n; i++) {
+    const text = labels[i];
+    if (!text) continue;
+    const t = n === 1 ? 0.5 : i / (n - 1);
+    ctx.textBaseline = i === 0 ? "top" : i === n - 1 ? "bottom" : "middle";
+    ctx.fillText(text, xRight, y0 + t * h);
+  }
+  ctx.restore();
+}
+
+function drawExportAxisLabels(ctx, x, y, w, scale) {
+  const { t0, t1 } = state.chartRange;
+  const hours = currentRangeHours();
+  const span = Math.max(1e-6, t1 - t0);
+  const n = 6;
+  ctx.save();
+  ctx.fillStyle = "#a8bab2";
+  ctx.font = `${11 * scale}px "IBM Plex Mono", ui-monospace, monospace`;
+  ctx.textBaseline = "top";
+  for (let i = 0; i < n; i++) {
+    const t = t0 + (span * i) / (n - 1);
+    const px = x + (w * i) / (n - 1);
+    ctx.textAlign = i === 0 ? "left" : i === n - 1 ? "right" : "center";
+    ctx.fillText(fmtAxisTime(t, { withDate: hours >= 48 }), px, y);
+  }
+  ctx.restore();
+}
+
+function drawExportLegend(ctx, rightX, y, scale) {
+  const items = [
+    { kind: "day", label: "den" },
+    { kind: "night", label: "noc" },
+    { kind: "limit", label: "limit" },
+  ];
+  if (state.aircraftShowUi) items.push({ kind: "aircraft", label: "přelet" });
+  ctx.save();
+  ctx.font = `${11 * scale}px Sora, system-ui, sans-serif`;
+  const sw = 12 * scale;
+  const gap = 18 * scale;
+  const labelGap = 6 * scale;
+  let total = 0;
+  for (const item of items) {
+    total += sw + labelGap + ctx.measureText(item.label).width + gap;
+  }
+  let cx = rightX - total + gap;
+  const sh = 8 * scale;
+  ctx.textBaseline = "middle";
+  ctx.textAlign = "left";
+  for (const item of items) {
+    const iy = y;
+    if (item.kind === "day") {
+      ctx.fillStyle = "rgba(126, 200, 163, 0.35)";
+      ctx.fillRect(cx, iy - sh / 2, sw, sh);
+      ctx.strokeStyle = "rgba(126, 200, 163, 0.55)";
+      ctx.lineWidth = 1;
+      ctx.strokeRect(cx + 0.5, iy - sh / 2 + 0.5, sw - 1, sh - 1);
+    } else if (item.kind === "night") {
+      ctx.fillStyle = "rgba(2, 6, 14, 0.9)";
+      ctx.fillRect(cx, iy - sh / 2, sw, sh);
+      ctx.strokeStyle = "rgba(232, 240, 236, 0.22)";
+      ctx.lineWidth = 1;
+      ctx.strokeRect(cx + 0.5, iy - sh / 2 + 0.5, sw - 1, sh - 1);
+    } else if (item.kind === "limit") {
+      ctx.strokeStyle = "#ff2d95";
+      ctx.lineWidth = 2.5 * scale;
+      ctx.beginPath();
+      ctx.moveTo(cx, iy);
+      ctx.lineTo(cx + sw, iy);
+      ctx.stroke();
+    } else {
+      ctx.fillStyle = "#c9d6cf";
+      ctx.font = `${12 * scale}px Sora, system-ui, sans-serif`;
+      ctx.textAlign = "center";
+      ctx.fillText("✈", cx + sw / 2, iy);
+      ctx.font = `${11 * scale}px Sora, system-ui, sans-serif`;
+      ctx.textAlign = "left";
+    }
+    cx += sw + labelGap;
+    ctx.fillStyle = "#a8bab2";
+    ctx.fillText(item.label, cx, iy);
+    cx += ctx.measureText(item.label).width + gap;
+  }
+  ctx.restore();
+}
+
+function drawBrandMark(ctx, x, y, size) {
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.scale(size / 24, size / 24);
+  ctx.strokeStyle = "#c4f082";
+  ctx.lineWidth = 2;
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  ctx.stroke(new Path2D("M11 5 6 9H2v6h4l5 4V5z"));
+  ctx.stroke(new Path2D("M15.54 8.46a5 5 0 0 1 0 7.07"));
+  ctx.stroke(new Path2D("M19.07 4.93a10 10 0 0 1 0 14.14"));
+  ctx.restore();
+}
+
+function historyExportPlotLayout(innerW) {
+  const chart = state.chart;
+  const canvas = $("chart");
+  const laeqOn = chartPaneOn("laeq") && canvas && ! $("chartLaeqStrip")?.hidden;
+  if (laeqOn && chart?.chartArea && canvas.clientWidth > 0) {
+    const scale = innerW / canvas.clientWidth;
+    return {
+      padL: chart.chartArea.left * scale,
+      plotW: (chart.chartArea.right - chart.chartArea.left) * scale,
+    };
+  }
+  const layout = getChartPlotLayout();
+  const srcW = (layout.padL || 0) + (layout.plotW || 0);
+  if (srcW > 0) {
+    const scale = innerW / srcW;
+    return { padL: layout.padL * scale, plotW: layout.plotW * scale };
+  }
+  return { padL: 56, plotW: innerW - 56 };
+}
+
+function loadQrDataUrl(text, px) {
+  if (typeof QRCode === "undefined" || typeof QRCode.toDataURL !== "function") {
+    return Promise.resolve(null);
+  }
+  return QRCode.toDataURL(text, {
+    width: px,
+    margin: 1,
+    errorCorrectionLevel: "M",
+    color: { dark: "#12201c", light: "#eef5f1" },
+  }).catch(() => null);
+}
+
+function loadQrImage(url) {
+  if (!url) return Promise.resolve(null);
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => resolve(img.width ? img : null);
+    img.onerror = () => resolve(null);
+    img.src = url;
+  });
+}
+
+function drawQrBadge(ctx, img, x, y, size) {
+  const inset = 10;
+  const box = size + inset * 2;
+  ctx.fillStyle = "#eef5f1";
+  if (typeof ctx.roundRect === "function") {
+    ctx.beginPath();
+    ctx.roundRect(x, y, box, box, 12);
+    ctx.fill();
+  } else {
+    ctx.fillRect(x, y, box, box);
+  }
+  ctx.drawImage(img, x + inset, y + inset, size, size);
+  return box;
+}
+
+function writePreviewPending(win) {
+  if (!win || win.closed) return;
+  try {
+    win.document.open();
+    win.document.write(
+      `<!DOCTYPE html><html lang="cs"><head><meta charset="utf-8"/><title>Generuji obrázek…</title>` +
+        `<style>html,body{margin:0;background:#0c1412;color:#a8bab2;font-family:Sora,system-ui,sans-serif;min-height:100%;display:grid;place-items:center}</style>` +
+        `</head><body><p>Generuji obrázek…</p></body></html>`
+    );
+    win.document.close();
+  } catch (_) {
+    /* ignore */
+  }
+}
+
+function showImageInWindow(win, blob, title) {
+  const url = URL.createObjectURL(blob);
+  const safeTitle = escapeHtml(title);
+  if (win && !win.closed) {
+    try {
+      win.document.open();
+      win.document.write(
+        `<!DOCTYPE html><html lang="cs"><head><meta charset="utf-8"/>` +
+          `<meta name="viewport" content="width=device-width, initial-scale=1"/>` +
+          `<title>${safeTitle}</title>` +
+          `<style>html,body{margin:0;background:#0c1412;min-height:100%}img{display:block;max-width:100%;height:auto;margin:0 auto}</style>` +
+          `</head><body><img src="${url}" alt="${safeTitle}"/></body></html>`
+      );
+      win.document.close();
+      return;
+    } catch (_) {
+      try {
+        win.location = url;
+        return;
+      } catch (__) {
+        /* fallback below */
+      }
+    }
+  }
+  const a = document.createElement("a");
+  a.href = url;
+  a.target = "_blank";
+  a.rel = "noopener";
+  a.download = "hluk-cloud.png";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+}
+
+async function composeHistoryImage() {
+  hideChartCrosshair();
+  hideChartHoverPanel();
+  closeAircraftPopup();
+  if (typeof document.fonts?.ready?.then === "function") {
+    try {
+      await document.fonts.ready;
+    } catch (_) {
+      /* ignore */
+    }
+  }
+
+  const { t0, t1 } = selectedHistoryRange();
+  const generatedAt = Date.now() / 1000;
+  const shareUrl = historyShareUrl();
+  const panes = visibleHistoryExportPanes();
+  const scale = 2;
+  const cssW = 1400;
+  const pad = 40;
+  const innerW = cssW - pad * 2;
+  const plot = historyExportPlotLayout(innerW);
+  const qrCss = 200;
+  const qrUrl = await loadQrDataUrl(shareUrl, Math.round(qrCss * scale));
+  const qrImg = await loadQrImage(qrUrl);
+
+  const stats = [
+    { label: "Průměr", value: $("statAvg")?.textContent || "—" },
+    { label: "Minimum", value: $("statMin")?.textContent || "—" },
+    { label: "Maximum", value: $("statMax")?.textContent || "—" },
+    { label: "Nad limitem", value: $("statAbove")?.textContent || "—" },
+    { label: "Prům. překročení", value: $("statAvgExcess")?.textContent || "—" },
+  ];
+  const th = state.lastHistory?.thresholds || {};
+  const dayLim = effectiveLimit(th.day_dba);
+  const nightLim = effectiveLimit(th.night_dba);
+  const limitLine =
+    dayLim != null && nightLim != null
+      ? `Hygienický limit  den ${fmtDb(dayLim)} dBA · noc ${fmtDb(nightLim)} dBA`
+      : "";
+
+  const measureLine = fmtMeasureRange(t0, t1);
+  const genLine = fmtDateTimeFull(generatedAt, { withSeconds: true });
+
+  const paneHeights = panes.map((pane) => {
+    const src = $(pane.canvasId);
+    const cssH = src.clientHeight || src.height / (devicePixelRatio || 1);
+    const cssSrcW = src.clientWidth || src.width / (devicePixelRatio || 1);
+    const drawW = pane.key === "laeq" ? innerW : plot.plotW;
+    const drawH = cssSrcW > 0 ? (cssH / cssSrcW) * drawW : cssH;
+    const titleH = pane.key === "laeq" ? 22 : 8;
+    return { drawW, drawH, titleH, axisH: 22, gap: 18 };
+  });
+
+  const qrInset = 10;
+  const qrBox = qrImg ? qrCss + qrInset * 2 : 0;
+  const headerH = Math.max(qrBox, 210) + 28;
+  let contentH = headerH + 8;
+  for (const ph of paneHeights) {
+    contentH += ph.titleH + ph.drawH + ph.axisH + ph.gap;
+  }
+  contentH += 56;
+  const cssH = Math.ceil(contentH + pad);
+
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.round(cssW * scale);
+  canvas.height = Math.round(cssH * scale);
+  const ctx = canvas.getContext("2d");
+  ctx.setTransform(scale, 0, 0, scale, 0, 0);
+  ctx.imageSmoothingEnabled = true;
+  if ("imageSmoothingQuality" in ctx) ctx.imageSmoothingQuality = "high";
+
+  ctx.fillStyle = "#0c1412";
+  ctx.fillRect(0, 0, cssW, cssH);
+  const g = ctx.createRadialGradient(cssW * 0.18, 0, 40, cssW * 0.18, 0, 560);
+  g.addColorStop(0, "rgba(126, 200, 163, 0.16)");
+  g.addColorStop(1, "rgba(126, 200, 163, 0)");
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, cssW, 420);
+
+  const qrX = qrImg ? cssW - pad - qrBox : cssW - pad;
+  const qrY = pad;
+  if (qrImg) drawQrBadge(ctx, qrImg, qrX, qrY, qrCss);
+
+  const textLeft = pad;
+  let y = pad;
+  ctx.textBaseline = "top";
+  ctx.textAlign = "left";
+  const icon = 28;
+  drawBrandMark(ctx, textLeft, y, icon);
+  ctx.fillStyle = "#e8f0ec";
+  ctx.font = "700 22px Fraunces, Georgia, serif";
+  ctx.fillText("Hlukoměr 24/7", textLeft + icon + 10, y);
+  y += 40;
+
+  ctx.fillStyle = "#7a9188";
+  ctx.font = "500 10px Sora, system-ui, sans-serif";
+  ctx.fillText("ZDROJ", textLeft, y);
+  ctx.fillStyle = "#c4f082";
+  ctx.font = "600 16px Sora, system-ui, sans-serif";
+  ctx.fillText("hluk.cloud", textLeft, y + 16);
+  y += 42;
+
+  ctx.fillStyle = "#7a9188";
+  ctx.font = "500 10px Sora, system-ui, sans-serif";
+  ctx.fillText("MĚŘENÍ", textLeft, y);
+  ctx.fillStyle = "#e8f0ec";
+  ctx.font = "400 14px Sora, system-ui, sans-serif";
+  ctx.fillText(measureLine, textLeft, y + 16);
+  y += 42;
+
+  let sx = textLeft;
+  for (const s of stats) {
+    ctx.font = "500 18px \"IBM Plex Mono\", ui-monospace, monospace";
+    const vw = ctx.measureText(s.value).width;
+    ctx.font = "500 10px Sora, system-ui, sans-serif";
+    const lw = ctx.measureText(s.label.toUpperCase()).width;
+    const colW = Math.max(vw, lw);
+    ctx.fillStyle = "#7a9188";
+    ctx.fillText(s.label.toUpperCase(), sx, y);
+    ctx.fillStyle = "#e8f0ec";
+    ctx.font = "500 18px \"IBM Plex Mono\", ui-monospace, monospace";
+    ctx.fillText(s.value, sx, y + 18);
+    sx += colW + 28;
+  }
+  y += 48;
+  if (limitLine) {
+    ctx.fillStyle = "#a8bab2";
+    ctx.font = "400 12px Sora, system-ui, sans-serif";
+    ctx.fillText(limitLine, textLeft, y);
+    y += 20;
+  }
+
+  y = Math.max(y, qrImg ? qrY + qrBox : y) + 16;
+
+  ctx.strokeStyle = "rgba(232, 240, 236, 0.12)";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(pad, y);
+  ctx.lineTo(cssW - pad, y);
+  ctx.stroke();
+  y += 16;
+
+  panes.forEach((pane, idx) => {
+    const ph = paneHeights[idx];
+    const src = $(pane.canvasId);
+    if (pane.key === "laeq") {
+      drawExportLegend(ctx, cssW - pad, y + 8, 1);
+    }
+    y += ph.titleH;
+
+    if (pane.key === "laeq") {
+      ctx.fillStyle = "#0a1010";
+      ctx.fillRect(pad, y, innerW, ph.drawH);
+      ctx.drawImage(src, pad, y, innerW, ph.drawH);
+      drawExportAxisLabels(ctx, pad + plot.padL, y + ph.drawH + 4, plot.plotW, 1);
+    } else {
+      const xPlot = pad + plot.padL;
+      drawExportYLabels(ctx, yLabelsFromEl(pane.yElId), xPlot - 8, y, ph.drawH, 1);
+      ctx.fillStyle = "#0a1010";
+      if (typeof ctx.roundRect === "function") {
+        ctx.beginPath();
+        ctx.roundRect(xPlot, y, plot.plotW, ph.drawH, 4);
+        ctx.fill();
+        ctx.save();
+        ctx.clip();
+        ctx.drawImage(src, xPlot, y, plot.plotW, ph.drawH);
+        ctx.restore();
+        ctx.strokeStyle = "rgba(232, 240, 236, 0.12)";
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.roundRect(xPlot, y, plot.plotW, ph.drawH, 4);
+        ctx.stroke();
+      } else {
+        ctx.fillRect(xPlot, y, plot.plotW, ph.drawH);
+        ctx.drawImage(src, xPlot, y, plot.plotW, ph.drawH);
+      }
+      drawExportAxisLabels(ctx, xPlot, y + ph.drawH + 4, plot.plotW, 1);
+    }
+    y += ph.drawH + ph.axisH + ph.gap;
+  });
+
+  ctx.strokeStyle = "rgba(232, 240, 236, 0.12)";
+  ctx.beginPath();
+  ctx.moveTo(pad, y);
+  ctx.lineTo(cssW - pad, y);
+  ctx.stroke();
+  y += 14;
+
+  ctx.textAlign = "right";
+  ctx.textBaseline = "top";
+  ctx.fillStyle = "#7a9188";
+  ctx.font = "500 10px Sora, system-ui, sans-serif";
+  ctx.fillText("VYGENEROVÁNO", cssW - pad, y);
+  ctx.fillStyle = "#e8f0ec";
+  ctx.font = "400 13px Sora, system-ui, sans-serif";
+  ctx.fillText(genLine, cssW - pad, y + 16);
+  ctx.fillStyle = "#7a9188";
+  ctx.font = "400 11px Sora, system-ui, sans-serif";
+  ctx.fillText("Bez nahrávek, pouze metriky", cssW - pad, y + 36);
+
+  return new Promise((resolve, reject) => {
+    canvas.toBlob((blob) => {
+      if (blob) resolve(blob);
+      else reject(new Error("Nepodařilo se vytvořit obrázek"));
+    }, "image/png");
+  });
+}
+
+async function exportHistoryImage(preview) {
+  const btn = $("historyExportBtn");
+  if (btn) {
+    btn.disabled = true;
+    btn.setAttribute("aria-busy", "true");
+  }
+  writePreviewPending(preview);
+  try {
+    const { t0, t1 } = selectedHistoryRange();
+    const blob = await composeHistoryImage();
+    const title = `Hlukoměr · ${fmtMeasureRange(t0, t1)}`;
+    showImageInWindow(preview, blob, title);
+  } catch (err) {
+    console.error(err);
+    if (preview && !preview.closed) {
+      try {
+        preview.document.open();
+        preview.document.write(
+          `<!DOCTYPE html><html lang="cs"><head><meta charset="utf-8"/><title>Chyba</title></head>` +
+            `<body style="font-family:system-ui;background:#0c1412;color:#e8f0ec;padding:2rem">` +
+            `Obrázek se nepodařilo vygenerovat.</body></html>`
+        );
+        preview.document.close();
+      } catch (_) {
+        /* ignore */
+      }
+    }
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.removeAttribute("aria-busy");
+    }
+  }
+}
+
 function bind() {
   $("rangeSelect").addEventListener("change", () => {
     closeAircraftPopup();
@@ -3768,6 +4319,10 @@ function bind() {
     applyHistoryTimeRange(t0, t1, hours);
     writeUrlFilters();
     refreshHistory();
+  });
+  $("historyExportBtn")?.addEventListener("click", () => {
+    const preview = window.open("about:blank", "_blank");
+    exportHistoryImage(preview);
   });
   $("chartSpecMarksClear")?.addEventListener("click", (ev) => {
     ev.stopPropagation();
@@ -3834,12 +4389,19 @@ function bind() {
 }
 
 initChart();
+const arrivedWithFilters = urlHasFilterParams();
 applyUrlFilters();
 bind();
 syncDisplayToggleUi();
 syncChartVisToggleUi();
 syncChartSpecVisibility(currentRangeHours());
 writeUrlFilters();
+if (arrivedWithFilters) {
+  if (location.hash !== "#stats") {
+    history.replaceState(null, "", `${location.pathname}${location.search}#stats`);
+  }
+  scrollToHistory();
+}
 refreshLatest();
 refreshHistory();
 refreshWeather();
@@ -3953,7 +4515,7 @@ function bindChartVisToggles() {
 
 function bindDisplayToggles() {
   const LONG_MS = 520;
-  document.querySelectorAll("#displayToggles .display-toggle").forEach((row) => {
+  document.querySelectorAll(".display-toggle[data-switch]").forEach((row) => {
     const btn = row.querySelector(".pill-switch");
     if (!btn) return;
     const kind = row.getAttribute("data-switch");
