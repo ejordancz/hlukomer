@@ -1533,6 +1533,12 @@ async function fetchJson(url) {
   return res.json();
 }
 
+function specDisplayRange(data) {
+  const vmin = (data?.vmin ?? 20) - windowOffset();
+  const vmax = Math.max(vmin + 8, (data?.vmax ?? 60) - windowOffset());
+  return { vmin, vmax };
+}
+
 /** Viridis-ish: quiet → loud (t v 0–1 podle min/max tohoto grafu). */
 function dbToColor(t) {
   const stops = SPEC_VIRIDIS_STOPS;
@@ -3096,8 +3102,7 @@ function drawHeatmapSpectrogram({
     }
   }
 
-  const vmin = (data.vmin ?? 20) - windowOffset();
-  const vmax = Math.max(vmin + 8, (data.vmax ?? 60) - windowOffset());
+  const { vmin, vmax } = specDisplayRange(data);
   const vSpan = vmax - vmin;
   const rowH = h / nBands;
   renderSpecScaleEl(strip.querySelector("[data-spec-scale]"), vmin, vmax);
@@ -3879,6 +3884,50 @@ function drawExportAxisLabels(ctx, x, y, w, scale) {
   ctx.restore();
 }
 
+function specExportDataForPane(key) {
+  if (key === "spec") return state.chartSpectrogram;
+  if (key === "fine") return state.chartFineSpectrogram;
+  if (key === "finelf") return state.chartFineLfSpectrogram;
+  return null;
+}
+
+function drawExportSpecScale(ctx, rightX, yTop, vmin, vmax, scale) {
+  const barW = 136 * scale;
+  const barH = 7 * scale;
+  const x0 = rightX - barW;
+  const lo = Number.isFinite(Number(vmin)) ? Number(vmin) : 20;
+  const hi = Math.max(lo + 8, Number.isFinite(Number(vmax)) ? Number(vmax) : 60);
+  ctx.save();
+  const grad = ctx.createLinearGradient(x0, 0, x0 + barW, 0);
+  for (const [t, rgb] of SPEC_VIRIDIS_STOPS) {
+    const p = Math.max(0, Math.min(1, t));
+    grad.addColorStop(p, `rgb(${rgb[0]},${rgb[1]},${rgb[2]})`);
+  }
+  ctx.fillStyle = grad;
+  if (typeof ctx.roundRect === "function") {
+    ctx.beginPath();
+    ctx.roundRect(x0, yTop, barW, barH, 2 * scale);
+    ctx.fill();
+    ctx.strokeStyle = "rgba(255, 255, 255, 0.12)";
+    ctx.lineWidth = 1;
+    ctx.stroke();
+  } else {
+    ctx.fillRect(x0, yTop, barW, barH);
+  }
+  const ticks = [lo, lo + (hi - lo) / 3, lo + (2 * (hi - lo)) / 3, hi];
+  ctx.fillStyle = "#a8bab2";
+  ctx.font = `500 ${9 * scale}px "IBM Plex Mono", ui-monospace, monospace`;
+  ctx.textBaseline = "top";
+  ticks.forEach((v, i) => {
+    const n = Math.round(v);
+    const label = i === ticks.length - 1 ? `${n} dB` : String(n);
+    const tx = x0 + (barW * i) / (ticks.length - 1);
+    ctx.textAlign = i === 0 ? "left" : i === ticks.length - 1 ? "right" : "center";
+    ctx.fillText(label, tx, yTop + barH + 3 * scale);
+  });
+  ctx.restore();
+}
+
 function drawExportLegend(ctx, rightX, y, scale) {
   const items = [
     { kind: "day", label: "den" },
@@ -4105,7 +4154,7 @@ async function composeHistoryImage() {
     const cssSrcW = src.clientWidth || src.width / (devicePixelRatio || 1);
     const drawW = pane.key === "laeq" ? innerW : plot.plotW;
     const drawH = cssSrcW > 0 ? (cssH / cssSrcW) * drawW : cssH;
-    const titleH = pane.key === "laeq" ? 22 : 8;
+    const titleH = pane.key === "laeq" ? 22 : specExportDataForPane(pane.key) ? 32 : 8;
     return { drawW, drawH, titleH, axisH: 22, gap: 18 };
   });
 
@@ -4203,6 +4252,23 @@ async function composeHistoryImage() {
     const src = $(pane.canvasId);
     if (pane.key === "laeq") {
       drawExportLegend(ctx, cssW - pad, y + 8, 1);
+    } else {
+      const specData = specExportDataForPane(pane.key);
+      if (specData) {
+        const title =
+          $(pane.stripId)?.querySelector(".chart-pane-title")?.textContent?.trim() ||
+          "";
+        const xPlot = pad + plot.padL;
+        ctx.save();
+        ctx.fillStyle = "#a8bab2";
+        ctx.font = "500 12px Sora, system-ui, sans-serif";
+        ctx.textAlign = "left";
+        ctx.textBaseline = "top";
+        ctx.fillText(title, xPlot, y + 2);
+        const { vmin, vmax } = specDisplayRange(specData);
+        drawExportSpecScale(ctx, xPlot + plot.plotW, y + 2, vmin, vmax, 1);
+        ctx.restore();
+      }
     }
     y += ph.titleH;
 
