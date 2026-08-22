@@ -54,6 +54,14 @@ const LF_BANDS = new Set([
 ]);
 
 const CHART_SPEC_HEIGHT = 288;
+/** Viridis: ticho → hlasito (0–1, podle min/max daného grafu). */
+const SPEC_VIRIDIS_STOPS = [
+  [0.0, [68, 1, 84]],
+  [0.25, [59, 82, 139]],
+  [0.5, [33, 145, 140]],
+  [0.75, [94, 201, 98]],
+  [1.0, [253, 231, 37]],
+];
 /** High-res FFT 190–270 Hz — 81 × 1 Hz bin; kompaktní heatmapa. */
 const FINE_SPEC_N_BINS = 81;
 /** High-res FFT 25–70 Hz — 46 × 1 Hz bin. */
@@ -1525,15 +1533,9 @@ async function fetchJson(url) {
   return res.json();
 }
 
-/** Viridis-ish: quiet → loud */
+/** Viridis-ish: quiet → loud (t v 0–1 podle min/max tohoto grafu). */
 function dbToColor(t) {
-  const stops = [
-    [0.0, [68, 1, 84]],
-    [0.25, [59, 82, 139]],
-    [0.5, [33, 145, 140]],
-    [0.75, [94, 201, 98]],
-    [1.0, [253, 231, 37]],
-  ];
+  const stops = SPEC_VIRIDIS_STOPS;
   const x = Math.max(0, Math.min(1, t));
   let a = stops[0];
   let b = stops[stops.length - 1];
@@ -1549,6 +1551,42 @@ function dbToColor(t) {
   const g = Math.round(a[1][1] + (b[1][1] - a[1][1]) * u);
   const bl = Math.round(a[1][2] + (b[1][2] - a[1][2]) * u);
   return `rgb(${r},${g},${bl})`;
+}
+
+function specViridisGradientCss() {
+  return SPEC_VIRIDIS_STOPS.map(
+    ([t, rgb]) => `rgb(${rgb[0]},${rgb[1]},${rgb[2]}) ${(t * 100).toFixed(0)}%`
+  ).join(", ");
+}
+
+/** Legenda intenzity — čísla = min/max tohoto spektrogramu. */
+function renderSpecScaleEl(el, vmin, vmax) {
+  if (!el) return;
+  const lo = Number.isFinite(Number(vmin)) ? Number(vmin) : 20;
+  const hi = Math.max(lo + 8, Number.isFinite(Number(vmax)) ? Number(vmax) : 60);
+  const ticks = [lo, lo + (hi - lo) / 3, lo + (2 * (hi - lo)) / 3, hi];
+  const tickHtml = ticks
+    .map((v, i) => {
+      const n = Math.round(v);
+      const label = i === ticks.length - 1 ? `${n} dB` : String(n);
+      return `<span>${label}</span>`;
+    })
+    .join("");
+  const barStyle = `background:linear-gradient(90deg, ${specViridisGradientCss()})`;
+  el.title = `Intenzita ${Math.round(lo)}–${Math.round(hi)} dB (rozsah tohoto grafu)`;
+  el.setAttribute(
+    "aria-label",
+    `Škála intenzity spektrogramu od ${Math.round(lo)} do ${Math.round(hi)} dB`
+  );
+  el.innerHTML =
+    `<span class="chart-spec-scale-bar" style="${barStyle}"></span>` +
+    `<span class="chart-spec-scale-ticks">${tickHtml}</span>`;
+}
+
+function renderSpecColorScales() {
+  document.querySelectorAll("[data-spec-scale]").forEach((el) => {
+    renderSpecScaleEl(el, 20, 60);
+  });
 }
 
 /** Stínování den/noc v pozadí grafu (za datovými řadami). */
@@ -3032,6 +3070,7 @@ function drawHeatmapSpectrogram({
     ctx.font = "12px Sora, sans-serif";
     ctx.fillText(emptyText, 10, Math.round(h / 2));
     if (yEl) yEl.innerHTML = "";
+    renderSpecScaleEl(strip.querySelector("[data-spec-scale]"), 20, 60);
     return;
   }
 
@@ -3061,6 +3100,7 @@ function drawHeatmapSpectrogram({
   const vmax = Math.max(vmin + 8, (data.vmax ?? 60) - windowOffset());
   const vSpan = vmax - vmin;
   const rowH = h / nBands;
+  renderSpecScaleEl(strip.querySelector("[data-spec-scale]"), vmin, vmax);
 
   ctx.fillStyle = "#0a1010";
   ctx.fillRect(0, 0, w, h);
@@ -4389,6 +4429,7 @@ function bind() {
 }
 
 initChart();
+renderSpecColorScales();
 const arrivedWithFilters = urlHasFilterParams();
 applyUrlFilters();
 bind();

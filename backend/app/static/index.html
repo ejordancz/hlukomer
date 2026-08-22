@@ -9,7 +9,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,700&family=IBM+Plex+Mono:wght@400;500&family=Sora:wght@400;500;600&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/static/style.css?v=101" />
+  <link rel="stylesheet" href="/static/style.css?v=103" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@mdi/font@7.4.47/css/materialdesignicons.min.css" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.9/dist/chart.umd.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
@@ -328,18 +328,21 @@
           <div class="chart-spec-strip" id="chartSpecStrip" hidden>
             <div class="chart-spec-head">
               <p class="chart-pane-title">Spektrogram 1/3 oktávy</p>
-              <div class="chart-spec-head-actions">
-                <button
-                  type="button"
-                  class="ghost-btn chart-spec-marks-clear"
-                  id="chartSpecMarksClear"
-                  hidden
-                >
-                  Smazat body
-                </button>
+              <div class="chart-spec-head-meta">
                 <div class="chart-spec-info" id="chartSpecKbdInfo">
                   <span class="chart-spec-info-mark" aria-hidden="true">i</span>
                   <span class="chart-spec-info-text" id="chartSpecKbdInfoTip">Klik = bod · WSAD pohyb</span>
+                </div>
+                <div class="chart-spec-scale" data-spec-scale="octave"></div>
+                <div class="chart-spec-head-actions">
+                  <button
+                    type="button"
+                    class="ghost-btn chart-spec-marks-clear"
+                    id="chartSpecMarksClear"
+                    hidden
+                  >
+                    Smazat body
+                  </button>
                 </div>
               </div>
             </div>
@@ -356,7 +359,10 @@
             <div class="chart-axis-labels" aria-hidden="true"></div>
           </div>
           <div class="chart-spec-strip chart-fine-spec-strip" id="chartFineSpecStrip" hidden>
-            <p class="chart-pane-title">Spektrogram 190–270 Hz</p>
+            <div class="chart-spec-head">
+              <p class="chart-pane-title">Spektrogram 190–270 Hz</p>
+              <div class="chart-spec-scale" data-spec-scale="fine"></div>
+            </div>
             <div class="chart-fine-spec-body">
               <div class="chart-spec-y chart-fine-spec-y" id="chartFineSpecYLabels" aria-hidden="true"></div>
               <div class="chart-spec-plot">
@@ -374,7 +380,10 @@
             <div class="chart-axis-labels" aria-hidden="true"></div>
           </div>
           <div class="chart-spec-strip chart-fine-spec-strip" id="chartFineLfSpecStrip" hidden>
-            <p class="chart-pane-title">Spektrogram 25–70 Hz</p>
+            <div class="chart-spec-head">
+              <p class="chart-pane-title">Spektrogram 25–70 Hz</p>
+              <div class="chart-spec-scale" data-spec-scale="fine"></div>
+            </div>
             <div class="chart-fine-spec-body">
               <div class="chart-spec-y chart-fine-spec-y" id="chartFineLfSpecYLabels" aria-hidden="true"></div>
               <div class="chart-spec-plot">
@@ -513,6 +522,6 @@
     </span>
   </button>
 
-  <script src="/static/app.js?v=98"></script>
+  <script src="/static/app.js?v=104"></script>
 </body>
 </html>
