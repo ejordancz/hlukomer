@@ -9,7 +9,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,700&family=IBM+Plex+Mono:wght@400;500&family=Sora:wght@400;500;600&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/static/style.css?v=103" />
+  <link rel="stylesheet" href="/static/style.css?v=106" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@mdi/font@7.4.47/css/materialdesignicons.min.css" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.9/dist/chart.umd.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
@@ -56,19 +56,35 @@
         <p class="brand-note">Orientační měření.</p>
       </div>
     </div>
-    <a
-      class="survey-banner"
-      href="https://anketa.hluk.cloud"
-      target="_blank"
-      rel="noopener noreferrer"
-    >
-      <svg class="survey-banner-icon" viewBox="0 0 24 24" aria-hidden="true">
-        <rect class="survey-bar survey-bar-1" x="3" y="12" width="5" height="9" rx="1.2" />
-        <rect class="survey-bar survey-bar-2" x="9.5" y="4" width="5" height="17" rx="1.2" />
-        <rect class="survey-bar survey-bar-3" x="16" y="8" width="5" height="13" rx="1.2" />
-      </svg>
-      <span class="survey-banner-text">Výsledky ankety</span>
-    </a>
+    <nav class="top-links" aria-label="Odkazy">
+      <a
+        class="survey-banner"
+        href="https://docs.hluk.cloud"
+        target="_blank"
+        rel="noopener noreferrer"
+      >
+        <svg class="survey-banner-icon" viewBox="0 0 24 24" aria-hidden="true">
+          <path class="survey-doc-body" d="M7.2 2.4h6.6L19.6 8.2v12.4A1.8 1.8 0 0 1 17.8 22.4H6.2A1.8 1.8 0 0 1 4.4 20.6V4.2A1.8 1.8 0 0 1 6.2 2.4h1z" />
+          <path class="survey-doc-fold" d="M13.8 2.4 19.6 8.2h-4a1.8 1.8 0 0 1-1.8-1.8V2.4z" />
+          <rect class="survey-doc-line" x="7.4" y="12.2" width="9.2" height="1.55" rx="0.77" />
+          <rect class="survey-doc-line" x="7.4" y="15.7" width="6.6" height="1.55" rx="0.77" />
+        </svg>
+        <span class="survey-banner-text">Dokumenty</span>
+      </a>
+      <a
+        class="survey-banner"
+        href="https://anketa.hluk.cloud"
+        target="_blank"
+        rel="noopener noreferrer"
+      >
+        <svg class="survey-banner-icon" viewBox="0 0 24 24" aria-hidden="true">
+          <rect class="survey-bar survey-bar-1" x="3" y="12" width="5" height="9" rx="1.2" />
+          <rect class="survey-bar survey-bar-2" x="9.5" y="4" width="5" height="17" rx="1.2" />
+          <rect class="survey-bar survey-bar-3" x="16" y="8" width="5" height="13" rx="1.2" />
+        </svg>
+        <span class="survey-banner-text">Výsledky ankety</span>
+      </a>
+    </nav>
     <div class="top-right">
       <div class="status" id="status" title="Stav připojení">
         <span class="dot" id="onlineDot"></span>
@@ -78,45 +94,6 @@
   </header>
 
   <main>
-    <section class="live-stage" aria-label="Aktuální hladina a spektrum">
-      <section class="live-b" aria-live="polite">
-        <div class="live-b-left">
-          <div class="live-b-hero">
-            <p class="label">Aktuální LAeq (1 s)</p>
-            <p class="level js-live-level">—.—</p>
-            <p class="unit">dBA</p>
-            <p class="meta js-live-meta">čekám na data z ESP32…</p>
-          </div>
-          <div class="live-b-metrics">
-            <div class="live-b-metric">
-              <span class="derived-label js-over-label">Od limitu</span>
-              <strong class="derived-value js-over-value">—.—</strong>
-              <span class="derived-unit js-over-sub">dB vs limit</span>
-            </div>
-            <div class="live-b-metric">
-              <span class="derived-label">Celková hladina</span>
-              <strong class="derived-value js-m-total">—.—</strong>
-              <span class="derived-unit js-m-total-unit">dB · bez A-vážení</span>
-            </div>
-            <div class="live-b-metric">
-              <span class="derived-label">Index basů (LFI)</span>
-              <strong class="derived-value js-m-lfi">—.—</strong>
-              <span class="derived-unit js-m-lfi-unit">dB · 20–200 Hz</span>
-            </div>
-            <div class="live-b-metric">
-              <span class="derived-label">Dominantní frekvence</span>
-              <strong class="derived-value js-m-dom">—</strong>
-              <span class="derived-unit js-m-dom-unit">oktávové pásmo</span>
-            </div>
-          </div>
-        </div>
-        <div class="live-b-right">
-          <div class="spectrum-bars js-spectrum-rows" aria-label="Spektrum"></div>
-        </div>
-      </section>
-      <a class="live-scroll-hint" href="#history">Historie</a>
-    </section>
-
     <section class="history" id="history" aria-label="Historie měření">
       <header class="history-head">
         <p class="section-kicker">Historie</p>
@@ -416,6 +393,49 @@
         <div class="chart-crosshair-h" id="chartCrosshairH" hidden></div>
         <div class="chart-spec-pointer" id="chartSpecPointer" hidden aria-hidden="true">
           <span class="chart-spec-pointer-readout" id="chartSpecPointerReadout" hidden></span>
+        </div>
+      </section>
+    </section>
+
+    <section class="live-stage" id="live" aria-label="Aktuální hladina a spektrum">
+      <div class="live-split">
+        <span class="live-split-line" aria-hidden="true"></span>
+        <p class="live-split-label">Aktuální měření</p>
+        <span class="live-split-line" aria-hidden="true"></span>
+      </div>
+      <section class="live-b" aria-live="polite">
+        <div class="live-b-left">
+          <div class="live-b-hero">
+            <p class="label">Aktuální LAeq (1 s)</p>
+            <p class="level js-live-level">—.—</p>
+            <p class="unit">dBA</p>
+            <p class="meta js-live-meta">čekám na data z ESP32…</p>
+          </div>
+          <div class="live-b-metrics">
+            <div class="live-b-metric">
+              <span class="derived-label js-over-label">Od limitu</span>
+              <strong class="derived-value js-over-value">—.—</strong>
+              <span class="derived-unit js-over-sub">dB vs limit</span>
+            </div>
+            <div class="live-b-metric">
+              <span class="derived-label">Celková hladina</span>
+              <strong class="derived-value js-m-total">—.—</strong>
+              <span class="derived-unit js-m-total-unit">dB · bez A-vážení</span>
+            </div>
+            <div class="live-b-metric">
+              <span class="derived-label">Index basů (LFI)</span>
+              <strong class="derived-value js-m-lfi">—.—</strong>
+              <span class="derived-unit js-m-lfi-unit">dB · 20–200 Hz</span>
+            </div>
+            <div class="live-b-metric">
+              <span class="derived-label">Dominantní frekvence</span>
+              <strong class="derived-value js-m-dom">—</strong>
+              <span class="derived-unit js-m-dom-unit">oktávové pásmo</span>
+            </div>
+          </div>
+        </div>
+        <div class="live-b-right">
+          <div class="spectrum-bars js-spectrum-rows" aria-label="Spektrum"></div>
         </div>
       </section>
     </section>
