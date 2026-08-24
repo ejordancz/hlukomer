@@ -15,6 +15,7 @@ static const char *const TAG = "hlukomer_fine_fft";
 
 /** Floor used instead of log10(0)/NaN — newlib log10f(0) divides by zero and panics on ESP32. */
 static constexpr float kMinPower = 1.0e-20f;
+static constexpr uint16_t kQueueMask = static_cast<uint16_t>(FINE_Q_LEN - 1);
 
 static float sanitize_power(float p) {
   if (!std::isfinite(p) || p < 0.0f)
@@ -46,14 +47,13 @@ void HlukomerFineFft::setup() {
   }
   const float two_pi = 6.283185307179586f;
   const float fs_dec = static_cast<float>(FINE_FS_DEC);
-  for (int i = 0; i < FINE_N_BINS; i++) {
-    const float freq = static_cast<float>(FINE_F0_HZ + i);
+  const float n_fft_f = static_cast<float>(FINE_N_FFT);
+  for (int i = 0; i < FINE_ALL_N_BINS; i++) {
+    const float freq = static_cast<float>(FINE_ALL_F0_HZ + i);
     this->coeff_[i] = 2.0f * cosf(two_pi * freq / fs_dec);
   }
-  for (int i = 0; i < FINE_LF_N_BINS; i++) {
-    const float freq = static_cast<float>(FINE_LF_F0_HZ + i);
-    this->coeff_lf_[i] = 2.0f * cosf(two_pi * freq / fs_dec);
-  }
+  for (int i = 0; i < FINE_N_FFT; i++)
+    this->hann_[i] = 0.5f - 0.5f * cosf(two_pi * static_cast<float>(i) / n_fft_f);
 
   // passive=true: sdílí stream se sound_level_meter (nestartuje mic sám)
   this->mic_source_ = std::make_unique<microphone::MicrophoneSource>(
@@ -63,16 +63,46 @@ void HlukomerFineFft::setup() {
   this->mic_source_->add_data_callback(
       [this](const std::vector<uint8_t> &data) { this->on_audio_(data); });
 
-  ESP_LOGI(TAG, "Goertzel DFT %d–%d + %d–%d Hz (%d+%d bins), decim %d→%d Hz, integrate %ds",
-           FINE_F0_HZ, FINE_F1_HZ, FINE_LF_F0_HZ, FINE_LF_F1_HZ, FINE_N_BINS, FINE_LF_N_BINS,
-           FINE_FS, FINE_FS_DEC, FINE_INTEGRATE_FRAMES);
+  // Core 0: I2S/SLM typically runs on core 1 — don't stall the ring buffer.
+  const BaseType_t ok = xTaskCreatePinnedToCore(
+      [](void *arg) { static_cast<HlukomerFineFft *>(arg)->dsp_loop_(); }, "fine_fft", 6144,
+      this, tskIDLE_PRIORITY + 1, &this->dsp_task_, 0);
+  if (ok != pdPASS) {
+    ESP_LOGE(TAG, "DSP task create failed");
+    this->mark_failed();
+    return;
+  }
+
+  ESP_LOGI(TAG,
+           "Goertzel DFT %d–%d + %d–%d Hz (%d bins, off-I2S), decim %d→%d Hz, integrate %ds",
+           FINE_F0_HZ, FINE_F1_HZ, FINE_LF_F0_HZ, FINE_LF_F1_HZ, FINE_ALL_N_BINS, FINE_FS,
+           FINE_FS_DEC, FINE_INTEGRATE_FRAMES);
 }
 
 void HlukomerFineFft::loop() {
-  if (this->post_pending_) {
-    this->post_pending_ = false;
+  if (this->post_pending_.exchange(false, std::memory_order_acquire))
     this->maybe_post_();
-  }
+}
+
+bool HlukomerFineFft::queue_push_(float x) {
+  const uint16_t w = this->q_w_.load(std::memory_order_relaxed);
+  const uint16_t next = (w + 1) & kQueueMask;
+  const uint16_t r = this->q_r_.load(std::memory_order_acquire);
+  if (next == r)
+    return false;
+  this->q_[w] = x;
+  this->q_w_.store(next, std::memory_order_release);
+  return true;
+}
+
+bool HlukomerFineFft::queue_pop_(float *x) {
+  const uint16_t r = this->q_r_.load(std::memory_order_relaxed);
+  const uint16_t w = this->q_w_.load(std::memory_order_acquire);
+  if (r == w)
+    return false;
+  *x = this->q_[r];
+  this->q_r_.store((r + 1) & kQueueMask, std::memory_order_release);
+  return true;
 }
 
 void HlukomerFineFft::on_audio_(const std::vector<uint8_t> &data) {
@@ -85,57 +115,74 @@ void HlukomerFineFft::on_audio_(const std::vector<uint8_t> &data) {
   if (n == 0)
     return;
 
-  const float inv_norm = (bps <= 16) ? (1.0f / 32768.0f) : (1.0f / 2147483648.0f);
-  const float inv_decim = 1.0f / static_cast<float>(FINE_DECIM);
+  int64_t acc = this->decim_acc_;
+  int dn = this->decim_n_;
+  uint32_t drops = 0;
 
-  for (size_t s = 0; s < n; s++) {
-    float x;
-    if (bps <= 16) {
+  if (bps > 16) {
+    const float scale = (1.0f / 2147483648.0f) / static_cast<float>(FINE_DECIM);
+    const int32_t *samples = reinterpret_cast<const int32_t *>(data.data());
+    for (size_t s = 0; s < n; s++) {
+      acc += samples[s];
+      dn++;
+      if (dn < FINE_DECIM)
+        continue;
+      const float xd = static_cast<float>(acc) * scale;
+      acc = 0;
+      dn = 0;
+      if (!this->queue_push_(xd))
+        drops++;
+    }
+  } else {
+    const float scale = (1.0f / 32768.0f) / static_cast<float>(FINE_DECIM);
+    for (size_t s = 0; s < n; s++) {
       int16_t v;
       memcpy(&v, data.data() + s * 2, 2);
-      x = static_cast<float>(v) * inv_norm;
-    } else {
-      int32_t v;
-      memcpy(&v, data.data() + s * 4, 4);
-      x = static_cast<float>(v) * inv_norm;
+      acc += v;
+      dn++;
+      if (dn < FINE_DECIM)
+        continue;
+      const float xd = static_cast<float>(acc) * scale;
+      acc = 0;
+      dn = 0;
+      if (!this->queue_push_(xd))
+        drops++;
     }
+  }
 
-    this->decim_acc_ += x;
-    this->decim_n_++;
-    if (this->decim_n_ < FINE_DECIM)
-      continue;
-    const float xd = this->decim_acc_ * inv_decim;
-    this->decim_acc_ = 0.0f;
-    this->decim_n_ = 0;
-    this->process_decimated_(xd);
+  this->decim_acc_ = acc;
+  this->decim_n_ = dn;
+  if (drops)
+    this->drops_.fetch_add(drops, std::memory_order_relaxed);
+  if (this->dsp_task_ != nullptr)
+    xTaskNotifyGive(this->dsp_task_);
+}
+
+void HlukomerFineFft::dsp_loop_() {
+  for (;;) {
+    ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(20));
+    float xd;
+    while (this->queue_pop_(&xd))
+      this->process_decimated_(xd);
   }
 }
 
 void HlukomerFineFft::process_decimated_(float xd) {
-  const float two_pi = 6.283185307179586f;
-  const float n_fft_f = static_cast<float>(FINE_N_FFT);
-  const float w = 0.5f - 0.5f * cosf(two_pi * static_cast<float>(this->sample_i_) / n_fft_f);
-  const float xw = xd * w;
+  const float xw = xd * this->hann_[this->sample_i_];
 
-  for (int b = 0; b < FINE_N_BINS; b++) {
+  for (int b = 0; b < FINE_ALL_N_BINS; b++) {
     const float s0 = xw + this->coeff_[b] * this->s_prev_[b] - this->s_prev2_[b];
     this->s_prev2_[b] = this->s_prev_[b];
     this->s_prev_[b] = s0;
   }
-  for (int b = 0; b < FINE_LF_N_BINS; b++) {
-    const float s0 = xw + this->coeff_lf_[b] * this->s_prev_lf_[b] - this->s_prev2_lf_[b];
-    this->s_prev2_lf_[b] = this->s_prev_lf_[b];
-    this->s_prev_lf_[b] = s0;
-  }
 
   this->sample_i_++;
-  if (this->sample_i_ >= FINE_N_FFT) {
+  if (this->sample_i_ >= FINE_N_FFT)
     this->finish_frame_();
-  }
 }
 
 void HlukomerFineFft::finish_frame_() {
-  for (int b = 0; b < FINE_N_BINS; b++) {
+  for (int b = 0; b < FINE_ALL_N_BINS; b++) {
     const float s0 = this->s_prev_[b];
     const float s1 = this->s_prev2_[b];
     const float c = this->coeff_[b];
@@ -144,15 +191,6 @@ void HlukomerFineFft::finish_frame_() {
     this->s_prev_[b] = 0.0f;
     this->s_prev2_[b] = 0.0f;
   }
-  for (int b = 0; b < FINE_LF_N_BINS; b++) {
-    const float s0 = this->s_prev_lf_[b];
-    const float s1 = this->s_prev2_lf_[b];
-    const float c = this->coeff_lf_[b];
-    float power = s1 * s1 + s0 * s0 - c * s0 * s1;
-    this->power_acc_lf_[b] += sanitize_power(power);
-    this->s_prev_lf_[b] = 0.0f;
-    this->s_prev2_lf_[b] = 0.0f;
-  }
   this->sample_i_ = 0;
   this->frames_ready_++;
   if (this->frames_ready_ >= FINE_INTEGRATE_FRAMES) {
@@ -160,19 +198,23 @@ void HlukomerFineFft::finish_frame_() {
     const float norm = (static_cast<float>(FINE_N_FFT) * 0.5f);
     const float norm2 = norm * norm;
     for (int b = 0; b < FINE_N_BINS; b++) {
-      this->pending_db_[b] = sanitize_power(this->power_acc_[b] * inv_frames / norm2);
-      this->power_acc_[b] = 0.0f;
+      this->pending_db_[b] =
+          sanitize_power(this->power_acc_[FINE_HF_OFFSET + b] * inv_frames / norm2);
     }
     for (int b = 0; b < FINE_LF_N_BINS; b++) {
-      this->pending_db_lf_[b] = sanitize_power(this->power_acc_lf_[b] * inv_frames / norm2);
-      this->power_acc_lf_[b] = 0.0f;
+      this->pending_db_lf_[b] = sanitize_power(this->power_acc_[b] * inv_frames / norm2);
     }
+    for (int b = 0; b < FINE_ALL_N_BINS; b++)
+      this->power_acc_[b] = 0.0f;
     this->frames_ready_ = 0;
-    this->post_pending_ = true;
+    this->post_pending_.store(true, std::memory_order_release);
   }
 }
 
 void HlukomerFineFft::maybe_post_() {
+  const uint32_t drops = this->drops_.exchange(0, std::memory_order_relaxed);
+  if (drops > 0)
+    ESP_LOGW(TAG, "Dropped %u decimated samples (DSP behind)", drops);
   // dB conversion on the main loop — log10f on the I2S/SLM task (core 1) panicked.
   for (int b = 0; b < FINE_N_BINS; b++)
     this->pending_db_[b] = power_to_db(this->pending_db_[b], this->spl_offset_);
