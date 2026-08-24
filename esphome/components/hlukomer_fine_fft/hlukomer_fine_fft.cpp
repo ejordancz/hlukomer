@@ -45,13 +45,14 @@ void HlukomerFineFft::setup() {
     return;
   }
   const float two_pi = 6.283185307179586f;
+  const float fs_dec = static_cast<float>(FINE_FS_DEC);
   for (int i = 0; i < FINE_N_BINS; i++) {
     const float freq = static_cast<float>(FINE_F0_HZ + i);
-    this->coeff_[i] = 2.0f * cosf(two_pi * freq / static_cast<float>(FINE_FS));
+    this->coeff_[i] = 2.0f * cosf(two_pi * freq / fs_dec);
   }
   for (int i = 0; i < FINE_LF_N_BINS; i++) {
     const float freq = static_cast<float>(FINE_LF_F0_HZ + i);
-    this->coeff_lf_[i] = 2.0f * cosf(two_pi * freq / static_cast<float>(FINE_FS));
+    this->coeff_lf_[i] = 2.0f * cosf(two_pi * freq / fs_dec);
   }
 
   // passive=true: sdílí stream se sound_level_meter (nestartuje mic sám)
@@ -62,9 +63,9 @@ void HlukomerFineFft::setup() {
   this->mic_source_->add_data_callback(
       [this](const std::vector<uint8_t> &data) { this->on_audio_(data); });
 
-  ESP_LOGI(TAG, "Goertzel DFT %d–%d + %d–%d Hz (%d+%d bins), integrate %ds", FINE_F0_HZ,
-           FINE_F1_HZ, FINE_LF_F0_HZ, FINE_LF_F1_HZ, FINE_N_BINS, FINE_LF_N_BINS,
-           FINE_INTEGRATE_FRAMES);
+  ESP_LOGI(TAG, "Goertzel DFT %d–%d + %d–%d Hz (%d+%d bins), decim %d→%d Hz, integrate %ds",
+           FINE_F0_HZ, FINE_F1_HZ, FINE_LF_F0_HZ, FINE_LF_F1_HZ, FINE_N_BINS, FINE_LF_N_BINS,
+           FINE_FS, FINE_FS_DEC, FINE_INTEGRATE_FRAMES);
 }
 
 void HlukomerFineFft::loop() {
@@ -85,8 +86,7 @@ void HlukomerFineFft::on_audio_(const std::vector<uint8_t> &data) {
     return;
 
   const float inv_norm = (bps <= 16) ? (1.0f / 32768.0f) : (1.0f / 2147483648.0f);
-  const float two_pi = 6.283185307179586f;
-  const float n_fft_f = static_cast<float>(FINE_N_FFT);
+  const float inv_decim = 1.0f / static_cast<float>(FINE_DECIM);
 
   for (size_t s = 0; s < n; s++) {
     float x;
@@ -100,25 +100,37 @@ void HlukomerFineFft::on_audio_(const std::vector<uint8_t> &data) {
       x = static_cast<float>(v) * inv_norm;
     }
 
-    const float w =
-        0.5f - 0.5f * cosf(two_pi * static_cast<float>(this->sample_i_) / n_fft_f);
-    const float xw = x * w;
+    this->decim_acc_ += x;
+    this->decim_n_++;
+    if (this->decim_n_ < FINE_DECIM)
+      continue;
+    const float xd = this->decim_acc_ * inv_decim;
+    this->decim_acc_ = 0.0f;
+    this->decim_n_ = 0;
+    this->process_decimated_(xd);
+  }
+}
 
-    for (int b = 0; b < FINE_N_BINS; b++) {
-      const float s0 = xw + this->coeff_[b] * this->s_prev_[b] - this->s_prev2_[b];
-      this->s_prev2_[b] = this->s_prev_[b];
-      this->s_prev_[b] = s0;
-    }
-    for (int b = 0; b < FINE_LF_N_BINS; b++) {
-      const float s0 = xw + this->coeff_lf_[b] * this->s_prev_lf_[b] - this->s_prev2_lf_[b];
-      this->s_prev2_lf_[b] = this->s_prev_lf_[b];
-      this->s_prev_lf_[b] = s0;
-    }
+void HlukomerFineFft::process_decimated_(float xd) {
+  const float two_pi = 6.283185307179586f;
+  const float n_fft_f = static_cast<float>(FINE_N_FFT);
+  const float w = 0.5f - 0.5f * cosf(two_pi * static_cast<float>(this->sample_i_) / n_fft_f);
+  const float xw = xd * w;
 
-    this->sample_i_++;
-    if (this->sample_i_ >= FINE_N_FFT) {
-      this->finish_frame_();
-    }
+  for (int b = 0; b < FINE_N_BINS; b++) {
+    const float s0 = xw + this->coeff_[b] * this->s_prev_[b] - this->s_prev2_[b];
+    this->s_prev2_[b] = this->s_prev_[b];
+    this->s_prev_[b] = s0;
+  }
+  for (int b = 0; b < FINE_LF_N_BINS; b++) {
+    const float s0 = xw + this->coeff_lf_[b] * this->s_prev_lf_[b] - this->s_prev2_lf_[b];
+    this->s_prev2_lf_[b] = this->s_prev_lf_[b];
+    this->s_prev_lf_[b] = s0;
+  }
+
+  this->sample_i_++;
+  if (this->sample_i_ >= FINE_N_FFT) {
+    this->finish_frame_();
   }
 }
 
@@ -170,7 +182,7 @@ void HlukomerFineFft::maybe_post_() {
 }
 
 bool HlukomerFineFft::post_json_(const float *db, const float *db_lf) {
-  static char body[6144];
+  static char body[8192];
   int pos = 0;
   pos += snprintf(body + pos, sizeof(body) - pos,
                   "{\"device_id\":\"%s\",\"kind\":\"spectrum_fine\",\"spectrum_fine\":[",

@@ -11,20 +11,23 @@
 namespace esphome {
 namespace hlukomer_fine_fft {
 
-static const int FINE_F0_HZ = 190;
+static const int FINE_F0_HZ = 150;
 static const int FINE_F1_HZ = 270;
-static const int FINE_N_BINS = FINE_F1_HZ - FINE_F0_HZ + 1;  // 81
+static const int FINE_N_BINS = FINE_F1_HZ - FINE_F0_HZ + 1;  // 121
 
-/** Low-band fine FFT: 25–70 Hz (1/3-oktáva floor … under mains/HVAC tones). */
+/** Low-band fine FFT: 25–150 Hz (1/3-oktáva floor … under mains/HVAC tones). */
 static const int FINE_LF_F0_HZ = 25;
-static const int FINE_LF_F1_HZ = 70;
-static const int FINE_LF_N_BINS = FINE_LF_F1_HZ - FINE_LF_F0_HZ + 1;  // 46
+static const int FINE_LF_F1_HZ = 150;
+static const int FINE_LF_N_BINS = FINE_LF_F1_HZ - FINE_LF_F0_HZ + 1;  // 126
 
 static const int FINE_FS = 48000;
-static const int FINE_N_FFT = 48000;  // Δf = 1 Hz
+/** Boxcar decimate 48 kHz → 4 kHz so 247 Goertzel bins fit next to SLM on ESP32-S3. */
+static const int FINE_DECIM = 12;
+static const int FINE_FS_DEC = FINE_FS / FINE_DECIM;  // 4000
+static const int FINE_N_FFT = FINE_FS_DEC;            // Δf = 1 Hz, 1 s window
 static const int FINE_INTEGRATE_FRAMES = 3;
 
-/** High-res 190–270 + 25–70 Hz: Goertzel DFT bins (≡ FFT bins) + Hann, 3 s energy avg → HTTP. */
+/** High-res 150–270 + 25–150 Hz: Goertzel DFT bins (≡ FFT bins) + Hann, 3 s energy avg → HTTP. */
 class HlukomerFineFft : public Component {
  public:
   void set_microphone(microphone::Microphone *mic) { this->mic_ = mic; }
@@ -41,6 +44,7 @@ class HlukomerFineFft : public Component {
 
  protected:
   void on_audio_(const std::vector<uint8_t> &data);
+  void process_decimated_(float xd);
   void finish_frame_();
   void maybe_post_();
   bool post_json_(const float *db, const float *db_lf);
@@ -64,6 +68,8 @@ class HlukomerFineFft : public Component {
   float s_prev2_lf_[FINE_LF_N_BINS]{};
   float power_acc_lf_[FINE_LF_N_BINS]{};
 
+  float decim_acc_{0.0f};
+  int decim_n_{0};
   int sample_i_{0};
   int frames_ready_{0};
   bool post_pending_{false};

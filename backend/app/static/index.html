@@ -9,7 +9,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,700&family=IBM+Plex+Mono:wght@400;500&family=Sora:wght@400;500;600&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/static/style.css?v=106" />
+  <link rel="stylesheet" href="/static/style.css?v=108" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@mdi/font@7.4.47/css/materialdesignicons.min.css" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.9/dist/chart.umd.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
@@ -207,7 +207,7 @@
                 <span class="pill-switch-thumb" aria-hidden="true"></span>
               </button>
             </div>
-            <span class="display-toggle-label" id="labelChartFine">Spektrogram 190–270 Hz</span>
+            <span class="display-toggle-label" id="labelChartFine">Spektrogram 150–270 Hz</span>
           </div>
           <div class="display-toggle chart-vis-toggle" data-chart="finelf">
             <div class="pill-switch-wrap">
@@ -222,7 +222,7 @@
                 <span class="pill-switch-thumb" aria-hidden="true"></span>
               </button>
             </div>
-            <span class="display-toggle-label" id="labelChartFineLf">Spektrogram 25–70 Hz</span>
+            <span class="display-toggle-label" id="labelChartFineLf">Spektrogram 25–150 Hz</span>
           </div>
         </div>
         <div class="chart-vis-toggles" id="chartFilterToggles">
@@ -337,7 +337,7 @@
           </div>
           <div class="chart-spec-strip chart-fine-spec-strip" id="chartFineSpecStrip" hidden>
             <div class="chart-spec-head">
-              <p class="chart-pane-title">Spektrogram 190–270 Hz</p>
+              <p class="chart-pane-title">Spektrogram 150–270 Hz</p>
               <div class="chart-spec-scale" data-spec-scale="fine"></div>
             </div>
             <div class="chart-fine-spec-body">
@@ -347,9 +347,9 @@
                 <div class="chart-spec-canvas-wrap chart-fine-spec-canvas-wrap" id="chartFineSpecCanvasWrap">
                   <canvas
                     id="chartFineSpectrogram"
-                    height="324"
+                    height="484"
                     role="img"
-                    aria-label="Spektrogram 190 až 270 Hz"
+                    aria-label="Spektrogram 150 až 270 Hz"
                   ></canvas>
                 </div>
               </div>
@@ -358,7 +358,7 @@
           </div>
           <div class="chart-spec-strip chart-fine-spec-strip" id="chartFineLfSpecStrip" hidden>
             <div class="chart-spec-head">
-              <p class="chart-pane-title">Spektrogram 25–70 Hz</p>
+              <p class="chart-pane-title">Spektrogram 25–150 Hz</p>
               <div class="chart-spec-scale" data-spec-scale="fine"></div>
             </div>
             <div class="chart-fine-spec-body">
@@ -368,9 +368,9 @@
                 <div class="chart-spec-canvas-wrap chart-fine-spec-canvas-wrap" id="chartFineLfSpecCanvasWrap">
                   <canvas
                     id="chartFineLfSpectrogram"
-                    height="184"
+                    height="504"
                     role="img"
-                    aria-label="Spektrogram 25 až 70 Hz"
+                    aria-label="Spektrogram 25 až 150 Hz"
                   ></canvas>
                 </div>
               </div>
@@ -542,6 +542,6 @@
     </span>
   </button>
 
-  <script src="/static/app.js?v=105"></script>
+  <script src="/static/app.js?v=107"></script>
 </body>
 </html>

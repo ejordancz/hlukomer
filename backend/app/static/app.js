@@ -62,10 +62,10 @@ const SPEC_VIRIDIS_STOPS = [
   [0.75, [94, 201, 98]],
   [1.0, [253, 231, 37]],
 ];
-/** High-res FFT 190–270 Hz — 81 × 1 Hz bin; kompaktní heatmapa. */
-const FINE_SPEC_N_BINS = 81;
-/** High-res FFT 25–70 Hz — 46 × 1 Hz bin. */
-const FINE_LF_SPEC_N_BINS = 46;
+/** High-res FFT 150–270 Hz — 121 × 1 Hz bin; kompaktní heatmapa. */
+const FINE_SPEC_N_BINS = 121;
+/** High-res FFT 25–150 Hz — 126 × 1 Hz bin. */
+const FINE_LF_SPEC_N_BINS = 126;
 /** Výška jednoho 1 Hz řádku v heatmapě (px) — celé spektrum musí být vidět. */
 const CHART_FINE_SPEC_ROW_H = 4;
 /** Výška grafu překročení limitu (~1/4 spektrogramu). */
@@ -3107,7 +3107,7 @@ function drawHeatmapSpectrogram({
   const rowH = h / nBands;
   renderSpecScaleEl(strip.querySelector("[data-spec-scale]"), vmin, vmax);
 
-  ctx.fillStyle = "#0a1010";
+  ctx.fillStyle = "#000000";
   ctx.fillRect(0, 0, w, h);
 
   const inView = cols.filter((c) => c.t >= t0 - span * 0.02 && c.t <= t1 + span * 0.02);
@@ -3119,13 +3119,18 @@ function drawHeatmapSpectrogram({
     if (x < -colW || x > w + colW) continue;
     const vals = col.v || [];
     for (let b = 0; b < nBands; b++) {
+      const raw = vals[b];
       const row = nBands - 1 - b;
       const y0 = row * rowH;
       const y1 = (row + 1) * rowH;
-      const raw = vals[b] ?? data.vmin ?? 20;
-      const shown = Number(raw) - off;
-      const t = (shown - vmin) / vSpan;
-      ctx.fillStyle = dbToColor(t);
+      const missing = typeof raw !== "number" || !Number.isFinite(raw);
+      if (missing) {
+        ctx.fillStyle = "#000000";
+      } else {
+        const shown = Number(raw) - off;
+        const t = vSpan ? (shown - vmin) / vSpan : 0;
+        ctx.fillStyle = dbToColor(t);
+      }
       ctx.fillRect(
         Math.floor(x - colW / 2),
         Math.floor(y0),
@@ -3183,7 +3188,7 @@ function drawChartFineSpectrogram() {
     height,
     data,
     emptyText: "High-res FFT…",
-    // 81 × 1 Hz — každých 5 Hz (190, 195, … 270).
+    // 121 × 1 Hz — každých 5 Hz (150, 155, … 270).
     yLabelFn: (lab, hz) => {
       const h = Number(hz);
       if (!Number.isFinite(h) || Math.round(h) % 5 !== 0) return "";
@@ -3211,7 +3216,7 @@ function drawChartFineLfSpectrogram() {
     height,
     data,
     emptyText: "High-res FFT LF…",
-    // 46 × 1 Hz — každých 5 Hz (25, 30, … 70).
+    // 126 × 1 Hz — každých 5 Hz (25, 30, … 150).
     yLabelFn: (lab, hz) => {
       const h = Number(hz);
       if (!Number.isFinite(h) || Math.round(h) % 5 !== 0) return "";

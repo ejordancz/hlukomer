@@ -43,12 +43,12 @@ SPECTRUM_BANDS: tuple[str, ...] = (
 )
 SPECTRUM_COLS: tuple[str, ...] = tuple(f"oct_{b}" for b in SPECTRUM_BANDS)
 
-# High-res FFT 190–270 Hz (1 Hz bins, 3 s energy average → spectrum_fine_3s).
-FINE_FFT_F0_HZ = 190
+# High-res FFT 150–270 Hz (1 Hz bins, 3 s energy average → spectrum_fine_3s).
+FINE_FFT_F0_HZ = 150
 FINE_FFT_F1_HZ = 270
 FINE_FFT_DF_HZ = 1.0
 FINE_FFT_INTEGRATE_S = 3
-FINE_FFT_N_BINS = FINE_FFT_F1_HZ - FINE_FFT_F0_HZ + 1  # 81
+FINE_FFT_N_BINS = FINE_FFT_F1_HZ - FINE_FFT_F0_HZ + 1  # 121
 FINE_FFT_HZ: tuple[int, ...] = tuple(
     range(FINE_FFT_F0_HZ, FINE_FFT_F1_HZ + 1, int(FINE_FFT_DF_HZ))
 )
@@ -56,14 +56,41 @@ FINE_FFT_BANDS: tuple[str, ...] = tuple(str(hz) for hz in FINE_FFT_HZ)
 FINE_FFT_DB0 = 0.0
 FINE_FFT_DB_STEP = 0.5
 
-# High-res FFT 25–70 Hz (same packing / 3 s → spectrum_fine_lf_3s; oddělená historie).
+# High-res FFT 25–150 Hz (same packing / 3 s → spectrum_fine_lf_3s; oddělená historie).
 FINE_LF_FFT_F0_HZ = 25
-FINE_LF_FFT_F1_HZ = 70
-FINE_LF_FFT_N_BINS = FINE_LF_FFT_F1_HZ - FINE_LF_FFT_F0_HZ + 1  # 46
+FINE_LF_FFT_F1_HZ = 150
+FINE_LF_FFT_N_BINS = FINE_LF_FFT_F1_HZ - FINE_LF_FFT_F0_HZ + 1  # 126
 FINE_LF_FFT_HZ: tuple[int, ...] = tuple(
     range(FINE_LF_FFT_F0_HZ, FINE_LF_FFT_F1_HZ + 1, int(FINE_FFT_DF_HZ))
 )
 FINE_LF_FFT_BANDS: tuple[str, ...] = tuple(str(hz) for hz in FINE_LF_FFT_HZ)
+
+# Předchozí firmware (190–270 / 150–300 / 25–70) — ingest i čtení bez přepisu blobů.
+LEGACY_FINE_FFT_F0_HZ = 190
+LEGACY_FINE_FFT_F1_HZ = 270
+LEGACY_FINE_FFT_N_BINS = LEGACY_FINE_FFT_F1_HZ - LEGACY_FINE_FFT_F0_HZ + 1  # 81
+LEGACY_FINE_FFT_WIDE_F0_HZ = 150
+LEGACY_FINE_FFT_WIDE_F1_HZ = 300
+LEGACY_FINE_FFT_WIDE_N_BINS = (
+    LEGACY_FINE_FFT_WIDE_F1_HZ - LEGACY_FINE_FFT_WIDE_F0_HZ + 1
+)  # 151
+LEGACY_FINE_LF_FFT_F0_HZ = 25
+LEGACY_FINE_LF_FFT_F1_HZ = 70
+LEGACY_FINE_LF_FFT_N_BINS = LEGACY_FINE_LF_FFT_F1_HZ - LEGACY_FINE_LF_FFT_F0_HZ + 1  # 46
+
+# n_bins → (f0_hz, f1_hz) pro ingest; původní payload se nemění.
+FINE_FFT_INGEST_LAYOUTS: dict[int, tuple[int, int]] = {
+    FINE_FFT_N_BINS: (FINE_FFT_F0_HZ, FINE_FFT_F1_HZ),
+    LEGACY_FINE_FFT_N_BINS: (LEGACY_FINE_FFT_F0_HZ, LEGACY_FINE_FFT_F1_HZ),
+    LEGACY_FINE_FFT_WIDE_N_BINS: (
+        LEGACY_FINE_FFT_WIDE_F0_HZ,
+        LEGACY_FINE_FFT_WIDE_F1_HZ,
+    ),
+}
+FINE_LF_FFT_INGEST_LAYOUTS: dict[int, tuple[int, int]] = {
+    FINE_LF_FFT_N_BINS: (FINE_LF_FFT_F0_HZ, FINE_LF_FFT_F1_HZ),
+    LEGACY_FINE_LF_FFT_N_BINS: (LEGACY_FINE_LF_FFT_F0_HZ, LEGACY_FINE_LF_FFT_F1_HZ),
+}
 
 # Staré IIR wide sloupce (drop bez náhrady).
 LEGACY_FINE_COLS: tuple[str, ...] = tuple(
@@ -161,8 +188,8 @@ def ensure_fine_fft_table(conn: sqlite3.Connection) -> None:
         CREATE TABLE IF NOT EXISTS spectrum_fine_3s (
             device_id TEXT NOT NULL,
             ts REAL NOT NULL,
-            n_bins INTEGER NOT NULL DEFAULT 81,
-            f0_hz REAL NOT NULL DEFAULT 190,
+            n_bins INTEGER NOT NULL DEFAULT 121,
+            f0_hz REAL NOT NULL DEFAULT 150,
             df_hz REAL NOT NULL DEFAULT 1,
             db0 REAL NOT NULL DEFAULT 0,
             payload BLOB NOT NULL,
@@ -171,7 +198,7 @@ def ensure_fine_fft_table(conn: sqlite3.Connection) -> None:
         CREATE TABLE IF NOT EXISTS spectrum_fine_lf_3s (
             device_id TEXT NOT NULL,
             ts REAL NOT NULL,
-            n_bins INTEGER NOT NULL DEFAULT 46,
+            n_bins INTEGER NOT NULL DEFAULT 126,
             f0_hz REAL NOT NULL DEFAULT 25,
             df_hz REAL NOT NULL DEFAULT 1,
             db0 REAL NOT NULL DEFAULT 0,
@@ -365,6 +392,54 @@ def ingest_live(
     return upsert_sample_1s(conn, ts, device_id, values)
 
 
+def resolve_fine_fft_ingest(
+    values: list[float],
+    meta: Optional[dict[str, Any]],
+    *,
+    layouts: dict[int, tuple[int, int]],
+) -> tuple[float, float, int]:
+    """Určí f0_hz, df_hz, n_bins. Přijímá aktuální i předchozí počet binů."""
+    n = len(values)
+    layout = layouts.get(n)
+    if layout is None:
+        allowed = ", ".join(str(k) for k in sorted(layouts))
+        raise ValueError(f"unexpected n_bins={n}; expected one of {allowed}")
+    f0, f1 = layout
+    df = FINE_FFT_DF_HZ
+    if meta:
+        raw_f0 = meta.get("f0_hz")
+        raw_f1 = meta.get("f1_hz")
+        raw_df = meta.get("df_hz")
+        try:
+            if raw_f0 is not None and raw_f1 is not None:
+                mf0 = int(round(float(raw_f0)))
+                mf1 = int(round(float(raw_f1)))
+                if mf1 - mf0 + 1 == n:
+                    f0, f1 = mf0, mf1
+            if raw_df is not None:
+                df = float(raw_df)
+        except (TypeError, ValueError):
+            pass
+    return float(f0), df, n
+
+
+def align_fine_fft_to_grid(
+    values: list[float],
+    *,
+    f0_hz: float,
+    df_hz: float,
+    target_hz: tuple[int, ...],
+) -> list[Optional[float]]:
+    """Namapuje uložený payload na kanonickou Hz osu; chybějící biny → None."""
+    src: dict[int, float] = {}
+    df = float(df_hz) if df_hz else FINE_FFT_DF_HZ
+    f0 = float(f0_hz)
+    for i, v in enumerate(values):
+        hz = int(round(f0 + i * df))
+        src[hz] = v
+    return [src.get(int(hz)) for hz in target_hz]
+
+
 def pack_fine_fft_payload(
     values_db: list[float],
     *,
@@ -411,10 +486,12 @@ def upsert_spectrum_fine_3s(
     df_hz: float = FINE_FFT_DF_HZ,
     db0: float = FINE_FFT_DB0,
 ) -> int:
-    if len(values_db) != FINE_FFT_N_BINS:
-        raise ValueError(f"spectrum_fine must have {FINE_FFT_N_BINS} values")
+    n_bins = len(values_db)
+    if n_bins not in FINE_FFT_INGEST_LAYOUTS:
+        allowed = ", ".join(str(k) for k in sorted(FINE_FFT_INGEST_LAYOUTS))
+        raise ValueError(f"spectrum_fine must have {allowed} values")
     bucket = fine_fft_bucket_start(ts)
-    payload = pack_fine_fft_payload(values_db, db0=db0, n_bins=FINE_FFT_N_BINS)
+    payload = pack_fine_fft_payload(values_db, db0=db0, n_bins=n_bins)
     conn.execute(
         """
         INSERT INTO spectrum_fine_3s
@@ -430,7 +507,7 @@ def upsert_spectrum_fine_3s(
         (
             device_id,
             bucket,
-            FINE_FFT_N_BINS,
+            n_bins,
             f0_hz,
             df_hz,
             db0,
@@ -450,10 +527,12 @@ def upsert_spectrum_fine_lf_3s(
     df_hz: float = FINE_FFT_DF_HZ,
     db0: float = FINE_FFT_DB0,
 ) -> int:
-    if len(values_db) != FINE_LF_FFT_N_BINS:
-        raise ValueError(f"spectrum_fine_lf must have {FINE_LF_FFT_N_BINS} values")
+    n_bins = len(values_db)
+    if n_bins not in FINE_LF_FFT_INGEST_LAYOUTS:
+        allowed = ", ".join(str(k) for k in sorted(FINE_LF_FFT_INGEST_LAYOUTS))
+        raise ValueError(f"spectrum_fine_lf must have {allowed} values")
     bucket = fine_fft_bucket_start(ts)
-    payload = pack_fine_fft_payload(values_db, db0=db0, n_bins=FINE_LF_FFT_N_BINS)
+    payload = pack_fine_fft_payload(values_db, db0=db0, n_bins=n_bins)
     conn.execute(
         """
         INSERT INTO spectrum_fine_lf_3s
@@ -469,7 +548,7 @@ def upsert_spectrum_fine_lf_3s(
         (
             device_id,
             bucket,
-            FINE_LF_FFT_N_BINS,
+            n_bins,
             f0_hz,
             df_hz,
             db0,
@@ -486,29 +565,32 @@ def _fetch_fine_fft_columns_raw(
     t_start: float,
     t_end: float,
     *,
-    expected_bins: int,
-) -> list[tuple[float, list[float]]]:
-    """(t_mid, values_db) z fine FFT tabulky; t_mid = bucket_start + 1.5 s."""
+    target_hz: tuple[int, ...],
+    default_f0_hz: float,
+) -> list[tuple[float, list[Optional[float]]]]:
+    """(t_mid, values na kanonické Hz ose) z fine FFT tabulky.
+
+    Staré řádky (jiný f0/n_bins) se nepřepisují — chybějící Hz jsou None.
+    t_mid = bucket_start + 1.5 s.
+    """
     if not table_exists(conn, table):
         return []
     rows = conn.execute(
         f"""
-        SELECT ts, n_bins, db0, payload
+        SELECT ts, n_bins, f0_hz, df_hz, db0, payload
         FROM {table}
         WHERE device_id = ? AND ts >= ? AND ts <= ?
         ORDER BY ts ASC
         """,
         (device_id, t_start - FINE_FFT_INTEGRATE_S, t_end),
     ).fetchall()
-    out: list[tuple[float, list[float]]] = []
+    out: list[tuple[float, list[Optional[float]]]] = []
     half = FINE_FFT_INTEGRATE_S / 2.0
     for r in rows:
         ts0 = float(r["ts"])
         t_mid = ts0 + half
         if ts0 + FINE_FFT_INTEGRATE_S < t_start or ts0 > t_end:
             continue
-        n_bins = int(r["n_bins"] or expected_bins)
-        db0 = float(r["db0"] if r["db0"] is not None else FINE_FFT_DB0)
         payload = r["payload"]
         if payload is None:
             continue
@@ -516,15 +598,21 @@ def _fetch_fine_fft_columns_raw(
             payload = payload.tobytes()
         elif not isinstance(payload, (bytes, bytearray)):
             payload = bytes(payload)
+        n_bins = int(r["n_bins"] or 0)
+        if n_bins <= 0:
+            n_bins = len(payload)
         if len(payload) < n_bins:
+            n_bins = len(payload)
+        if n_bins <= 0:
             continue
+        db0 = float(r["db0"] if r["db0"] is not None else FINE_FFT_DB0)
+        f0 = float(r["f0_hz"] if r["f0_hz"] is not None else default_f0_hz)
+        df = float(r["df_hz"] if r["df_hz"] is not None else FINE_FFT_DF_HZ)
         vals = unpack_fine_fft_payload(payload, db0=db0, n_bins=n_bins)
-        if len(vals) < expected_bins:
-            pad = vals[-1] if vals else 0.0
-            vals = vals + [pad] * (expected_bins - len(vals))
-        elif len(vals) > expected_bins:
-            vals = vals[:expected_bins]
-        out.append((t_mid, vals))
+        aligned = align_fine_fft_to_grid(
+            vals, f0_hz=f0, df_hz=df, target_hz=target_hz
+        )
+        out.append((t_mid, aligned))
     return out
 
 
@@ -533,15 +621,16 @@ def fetch_spectrum_fine_columns_raw(
     device_id: str,
     t_start: float,
     t_end: float,
-) -> list[tuple[float, list[float]]]:
-    """(t_mid, values_db[81]) z spectrum_fine_3s; t_mid = bucket_start + 1.5 s."""
+) -> list[tuple[float, list[Optional[float]]]]:
+    """(t_mid, values na 150–270 Hz) z spectrum_fine_3s; t_mid = bucket_start + 1.5 s."""
     return _fetch_fine_fft_columns_raw(
         conn,
         "spectrum_fine_3s",
         device_id,
         t_start,
         t_end,
-        expected_bins=FINE_FFT_N_BINS,
+        target_hz=FINE_FFT_HZ,
+        default_f0_hz=float(LEGACY_FINE_FFT_F0_HZ),
     )
 
 
@@ -550,15 +639,16 @@ def fetch_spectrum_fine_lf_columns_raw(
     device_id: str,
     t_start: float,
     t_end: float,
-) -> list[tuple[float, list[float]]]:
-    """(t_mid, values_db[46]) z spectrum_fine_lf_3s; t_mid = bucket_start + 1.5 s."""
+) -> list[tuple[float, list[Optional[float]]]]:
+    """(t_mid, values na 25–150 Hz) z spectrum_fine_lf_3s; t_mid = bucket_start + 1.5 s."""
     return _fetch_fine_fft_columns_raw(
         conn,
         "spectrum_fine_lf_3s",
         device_id,
         t_start,
         t_end,
-        expected_bins=FINE_LF_FFT_N_BINS,
+        target_hz=FINE_LF_FFT_HZ,
+        default_f0_hz=float(LEGACY_FINE_LF_FFT_F0_HZ),
     )
 
 

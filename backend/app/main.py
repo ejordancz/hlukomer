@@ -132,13 +132,13 @@ SPECTRUM_HZ: tuple[float, ...] = (
 )
 SPECTRUM_METRICS: tuple[str, ...] = tuple(f"oct_{b}" for b in SPECTRUM_BANDS)
 
-# High-res FFT 190–270 Hz (1 Hz bins → spectrum_fine_3s)
+# High-res FFT 150–270 Hz (1 Hz bins → spectrum_fine_3s)
 FINE_SPECTRUM_HZ: tuple[float, ...] = tuple(float(hz) for hz in storage.FINE_FFT_HZ)
 FINE_SPECTRUM_BANDS: tuple[str, ...] = storage.FINE_FFT_BANDS
 FINE_SPECTRUM_LABELS: tuple[str, ...] = tuple(
     f"{int(hz)} Hz" for hz in FINE_SPECTRUM_HZ
 )
-# High-res FFT 25–70 Hz (1 Hz bins → spectrum_fine_lf_3s)
+# High-res FFT 25–150 Hz (1 Hz bins → spectrum_fine_lf_3s)
 FINE_LF_SPECTRUM_HZ: tuple[float, ...] = tuple(float(hz) for hz in storage.FINE_LF_FFT_HZ)
 FINE_LF_SPECTRUM_BANDS: tuple[str, ...] = storage.FINE_LF_FFT_BANDS
 FINE_LF_SPECTRUM_LABELS: tuple[str, ...] = tuple(
@@ -453,11 +453,15 @@ class IngestPayload(BaseModel):
     lamin_1min: Optional[float] = None
     # 17 pásem: 1/3-oktáva 25–250 Hz + oktávy výš
     spectrum: Optional[list[float]] = Field(default=None, max_length=17)
-    # High-res FFT 190–270 Hz (81 × 1 Hz); kind=spectrum_fine
-    spectrum_fine: Optional[list[float]] = Field(default=None, max_length=81)
+    # High-res FFT 150–270 Hz (121 × 1 Hz); kind=spectrum_fine
+    spectrum_fine: Optional[list[float]] = Field(
+        default=None, max_length=max(storage.FINE_FFT_INGEST_LAYOUTS)
+    )
     spectrum_fine_meta: Optional[dict[str, Any]] = None
-    # High-res FFT 25–70 Hz (46 × 1 Hz); volitelně spolu se spectrum_fine
-    spectrum_fine_lf: Optional[list[float]] = Field(default=None, max_length=46)
+    # High-res FFT 25–150 Hz (126 × 1 Hz); volitelně spolu se spectrum_fine
+    spectrum_fine_lf: Optional[list[float]] = Field(
+        default=None, max_length=storage.FINE_LF_FFT_N_BINS
+    )
     spectrum_fine_lf_meta: Optional[dict[str, Any]] = None
     ts: Optional[float] = None  # unix seconds; default = server time
 
@@ -1026,27 +1030,43 @@ def ingest(payload: IngestPayload, _: None = Depends(require_api_key)) -> dict[s
     if payload.kind == "spectrum_fine":
         if payload.spectrum_fine is None:
             raise HTTPException(status_code=400, detail="spectrum_fine required")
-        if len(payload.spectrum_fine) != storage.FINE_FFT_N_BINS:
-            raise HTTPException(
-                status_code=400,
-                detail=f"spectrum_fine must have {storage.FINE_FFT_N_BINS} values",
+        try:
+            f0, df, _n = storage.resolve_fine_fft_ingest(
+                payload.spectrum_fine,
+                payload.spectrum_fine_meta,
+                layouts=storage.FINE_FFT_INGEST_LAYOUTS,
             )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         written_lf = 0
+        lf_f0: Optional[float] = None
+        lf_df: Optional[float] = None
         if payload.spectrum_fine_lf is not None:
-            if len(payload.spectrum_fine_lf) != storage.FINE_LF_FFT_N_BINS:
-                raise HTTPException(
-                    status_code=400,
-                    detail=(
-                        f"spectrum_fine_lf must have {storage.FINE_LF_FFT_N_BINS} values"
-                    ),
+            try:
+                lf_f0, lf_df, _n_lf = storage.resolve_fine_fft_ingest(
+                    payload.spectrum_fine_lf,
+                    payload.spectrum_fine_lf_meta,
+                    layouts=storage.FINE_LF_FFT_INGEST_LAYOUTS,
                 )
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
         with db() as conn:
             written = storage.upsert_spectrum_fine_3s(
-                conn, ts, payload.device_id, payload.spectrum_fine
+                conn,
+                ts,
+                payload.device_id,
+                payload.spectrum_fine,
+                f0_hz=f0,
+                df_hz=df,
             )
             if payload.spectrum_fine_lf is not None:
                 written_lf = storage.upsert_spectrum_fine_lf_3s(
-                    conn, ts, payload.device_id, payload.spectrum_fine_lf
+                    conn,
+                    ts,
+                    payload.device_id,
+                    payload.spectrum_fine_lf,
+                    f0_hz=lf_f0 if lf_f0 is not None else storage.FINE_LF_FFT_F0_HZ,
+                    df_hz=lf_df if lf_df is not None else storage.FINE_FFT_DF_HZ,
                 )
         return {
             "ok": True,
@@ -1158,7 +1178,7 @@ def fetch_spectrum_at(
 
 
 def downsample_spectrum_columns(
-    complete: list[tuple[float, list[float]]],
+    complete: list[tuple[float, list[Optional[float]]]],
     max_columns: int,
 ) -> tuple[list[dict[str, Any]], Optional[float], Optional[float]]:
     if not complete:
@@ -1167,7 +1187,7 @@ def downsample_spectrum_columns(
     n_bands = len(complete[0][1])
     if len(complete) > max_columns:
         bucket_size = len(complete) / max_columns
-        down: list[tuple[float, list[float]]] = []
+        down: list[tuple[float, list[Optional[float]]]] = []
         i = 0.0
         while int(i) < len(complete):
             start = int(i)
@@ -1176,18 +1196,34 @@ def downsample_spectrum_columns(
             if not chunk:
                 break
             t = sum(c[0] for c in chunk) / len(chunk)
-            avg_vals: list[float] = []
+            avg_vals: list[Optional[float]] = []
             for bi in range(n_bands):
-                e = sum(_db_to_energy(c[1][bi]) for c in chunk) / len(chunk)
-                avg_vals.append(10.0 * math.log10(e) if e > 0 else chunk[0][1][bi])
+                band_vals = [
+                    c[1][bi]
+                    for c in chunk
+                    if bi < len(c[1]) and c[1][bi] is not None
+                ]
+                if not band_vals:
+                    avg_vals.append(None)
+                    continue
+                e = sum(_db_to_energy(v) for v in band_vals) / len(band_vals)
+                avg_vals.append(
+                    10.0 * math.log10(e) if e > 0 else band_vals[0]
+                )
             down.append((t, avg_vals))
             i += bucket_size
         complete = down
 
-    all_vals = [v for _, vals in complete for v in vals]
-    vmin = min(all_vals)
-    vmax = max(all_vals)
-    columns = [{"t": t, "v": [round(x, 1) for x in vals]} for t, vals in complete]
+    all_vals = [v for _, vals in complete for v in vals if v is not None]
+    vmin = min(all_vals) if all_vals else None
+    vmax = max(all_vals) if all_vals else None
+    columns = [
+        {
+            "t": t,
+            "v": [None if x is None else round(x, 1) for x in vals],
+        }
+        for t, vals in complete
+    ]
     return columns, vmin, vmax
 
 
@@ -1311,7 +1347,7 @@ def spectrum_fine_history(
     device_id: str = Query(default="hlukomer"),
     max_columns: int = Query(default=360, ge=10, le=2000),
 ) -> dict[str, Any]:
-    """Heatmapa high-res FFT 190–270 Hz (1 Hz bins, 3 s energy average)."""
+    """Heatmapa high-res FFT 150–270 Hz (1 Hz bins, 3 s energy average)."""
     now = utc_now()
     span = hours * 3600
     if start is None:
@@ -1362,7 +1398,7 @@ def spectrum_fine_history(
         "offline": offline,
         "storage": storage_info,
         "note": (
-            "High-res FFT 190–270 Hz (Δf=1 Hz). "
+            "High-res FFT 150–270 Hz (Δf=1 Hz). "
             "Sloupec ≈ 3 s energy average. Trvalá čára = tonální složka."
         ),
     }
@@ -1378,7 +1414,7 @@ def spectrum_fine_lf_history(
     device_id: str = Query(default="hlukomer"),
     max_columns: int = Query(default=360, ge=10, le=2000),
 ) -> dict[str, Any]:
-    """Heatmapa high-res FFT 25–70 Hz (1 Hz bins, 3 s energy average)."""
+    """Heatmapa high-res FFT 25–150 Hz (1 Hz bins, 3 s energy average)."""
     now = utc_now()
     span = hours * 3600
     if start is None:
@@ -1429,7 +1465,7 @@ def spectrum_fine_lf_history(
         "offline": offline,
         "storage": storage_info,
         "note": (
-            "High-res FFT 25–70 Hz (Δf=1 Hz). "
+            "High-res FFT 25–150 Hz (Δf=1 Hz). "
             "Sloupec ≈ 3 s energy average. Trvalá čára = tonální složka "
             "(např. 50 Hz síť, 25/63 Hz VZT)."
         ),
