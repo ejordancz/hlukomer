@@ -7,6 +7,7 @@ import hmac
 import json
 import math
 import os
+import re
 import secrets
 import shutil
 import sqlite3
@@ -67,6 +68,25 @@ TZ = ZoneInfo(TZ_NAME)
 RETENTION_DAYS = storage.RETENTION_DAYS
 
 STATIC_DIR = Path(__file__).parent / "static"
+_NO_STORE_HEADERS = {
+    "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+    "Pragma": "no-cache",
+    "Expires": "0",
+}
+
+
+def _static_file_v(name: str) -> str:
+    path = STATIC_DIR / name
+    try:
+        st = path.stat()
+        return f"{int(st.st_mtime)}-{st.st_size}"
+    except OSError:
+        return "0"
+
+
+def static_rev() -> str:
+    """Změní se při úpravě CSS/JS — dashboard se na to umí sám přenačíst."""
+    return f"{_static_file_v('style.css')}.{_static_file_v('app.js')}"
 TIANJI_TRACKER_SCRIPT = (
     '<script async defer src="https://tianji.ejordan.cz/tracker.js" '
     'data-website-id="cms78kn1z0k4lurf4uhwzjzu7"></script>'
@@ -1601,7 +1621,7 @@ def stats(
 
 @app.get("/api/health")
 def health() -> dict[str, str]:
-    return {"status": "ok"}
+    return {"status": "ok", "static_rev": static_rev()}
 
 
 @app.get("/api/admin/storage")
@@ -1732,6 +1752,18 @@ def downsample(points: list[dict[str, float]], max_points: int) -> list[dict[str
 @app.get("/")
 def index() -> HTMLResponse:
     html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+    html = re.sub(
+        r"/static/style\.css\?v=[^\"']+",
+        f"/static/style.css?v={_static_file_v('style.css')}",
+        html,
+        count=1,
+    )
+    html = re.sub(
+        r"/static/app\.js\?v=[^\"']+",
+        f"/static/app.js?v={_static_file_v('app.js')}",
+        html,
+        count=1,
+    )
     config = {
         "window_correction_db": DISPLAY_WINDOW_CORRECTION_DB,
         "tonal_penalty_db": DISPLAY_TONAL_PENALTY_DB,
@@ -1739,6 +1771,7 @@ def index() -> HTMLResponse:
     config_script = (
         "<script>"
         f"window.__DISPLAY_CONFIG={json.dumps(config, separators=(',', ':'))};"
+        f"window.__STATIC_REV={json.dumps(static_rev())};"
         "</script>"
     )
     if "<!-- DISPLAY_CONFIG -->" in html:
@@ -1750,7 +1783,7 @@ def index() -> HTMLResponse:
         html = html.replace("<!-- TRACKER_SCRIPT -->", tracker_script, 1)
     elif tracker_script:
         html = html.replace("</head>", f"{tracker_script}\n</head>", 1)
-    return HTMLResponse(html)
+    return HTMLResponse(html, headers=_NO_STORE_HEADERS)
 
 
 @app.get("/favicon.ico")

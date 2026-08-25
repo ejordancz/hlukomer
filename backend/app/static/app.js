@@ -4543,6 +4543,25 @@ setInterval(() => {
   if (state.chartLive && !state.chartPanning) refreshHistory();
 }, 15000);
 
+/** Po nasazení CSS/JS se stránka sama přenačte — bez Ctrl+Shift+R. */
+function checkStaticRev() {
+  const expected = window.__STATIC_REV;
+  if (!expected) return;
+  fetch("/api/health", { cache: "no-store" })
+    .then((r) => r.json())
+    .then((j) => {
+      if (j && j.static_rev && j.static_rev !== expected) {
+        location.reload();
+      }
+    })
+    .catch(() => {});
+}
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") checkStaticRev();
+});
+setInterval(checkStaticRev, 30_000);
+checkStaticRev();
+
 function isSettingsOpen() {
   const panel = $("settingsPanel");
   return !!(panel && !panel.hidden);
