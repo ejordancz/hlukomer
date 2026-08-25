@@ -43,12 +43,12 @@ SPECTRUM_BANDS: tuple[str, ...] = (
 )
 SPECTRUM_COLS: tuple[str, ...] = tuple(f"oct_{b}" for b in SPECTRUM_BANDS)
 
-# High-res FFT 190–300 Hz (1 Hz bins, 3 s energy average → spectrum_fine_3s).
-FINE_FFT_F0_HZ = 190
-FINE_FFT_F1_HZ = 300
+# High-res FFT 170–270 Hz (1 Hz bins, 3 s energy average → spectrum_fine_3s).
+FINE_FFT_F0_HZ = 170
+FINE_FFT_F1_HZ = 270
 FINE_FFT_DF_HZ = 1.0
 FINE_FFT_INTEGRATE_S = 3
-FINE_FFT_N_BINS = FINE_FFT_F1_HZ - FINE_FFT_F0_HZ + 1  # 111
+FINE_FFT_N_BINS = FINE_FFT_F1_HZ - FINE_FFT_F0_HZ + 1  # 101
 FINE_FFT_HZ: tuple[int, ...] = tuple(
     range(FINE_FFT_F0_HZ, FINE_FFT_F1_HZ + 1, int(FINE_FFT_DF_HZ))
 )
@@ -74,6 +74,16 @@ LEGACY_FINE_FFT_MID_F1_HZ = 270
 LEGACY_FINE_FFT_MID_N_BINS = (
     LEGACY_FINE_FFT_MID_F1_HZ - LEGACY_FINE_FFT_MID_F0_HZ + 1
 )  # 121
+LEGACY_FINE_FFT_HF_F0_HZ = 190
+LEGACY_FINE_FFT_HF_F1_HZ = 300
+LEGACY_FINE_FFT_HF_N_BINS = (
+    LEGACY_FINE_FFT_HF_F1_HZ - LEGACY_FINE_FFT_HF_F0_HZ + 1
+)  # 111
+LEGACY_FINE_FFT_EXT_F0_HZ = 170
+LEGACY_FINE_FFT_EXT_F1_HZ = 300
+LEGACY_FINE_FFT_EXT_N_BINS = (
+    LEGACY_FINE_FFT_EXT_F1_HZ - LEGACY_FINE_FFT_EXT_F0_HZ + 1
+)  # 131
 LEGACY_FINE_FFT_WIDE_F0_HZ = 150
 LEGACY_FINE_FFT_WIDE_F1_HZ = 300
 LEGACY_FINE_FFT_WIDE_N_BINS = (
@@ -89,6 +99,11 @@ LEGACY_FINE_LF_FFT_WIDE_N_BINS = (
 FINE_FFT_INGEST_LAYOUTS: dict[int, tuple[int, int]] = {
     FINE_FFT_N_BINS: (FINE_FFT_F0_HZ, FINE_FFT_F1_HZ),
     LEGACY_FINE_FFT_N_BINS: (LEGACY_FINE_FFT_F0_HZ, LEGACY_FINE_FFT_F1_HZ),
+    LEGACY_FINE_FFT_HF_N_BINS: (LEGACY_FINE_FFT_HF_F0_HZ, LEGACY_FINE_FFT_HF_F1_HZ),
+    LEGACY_FINE_FFT_EXT_N_BINS: (
+        LEGACY_FINE_FFT_EXT_F0_HZ,
+        LEGACY_FINE_FFT_EXT_F1_HZ,
+    ),
     LEGACY_FINE_FFT_MID_N_BINS: (
         LEGACY_FINE_FFT_MID_F0_HZ,
         LEGACY_FINE_FFT_MID_F1_HZ,
@@ -636,7 +651,7 @@ def fetch_spectrum_fine_columns_raw(
     t_start: float,
     t_end: float,
 ) -> list[tuple[float, list[Optional[float]]]]:
-    """(t_mid, values na 190–300 Hz) z spectrum_fine_3s; t_mid = bucket_start + 1.5 s."""
+    """(t_mid, values na 170–270 Hz) z spectrum_fine_3s; t_mid = bucket_start + 1.5 s."""
     return _fetch_fine_fft_columns_raw(
         conn,
         "spectrum_fine_3s",

@@ -1546,12 +1546,12 @@ main {
 
 #chartFineSpecStrip .chart-spec-y.chart-fine-spec-y,
 #chartFineSpecStrip .chart-spec-canvas-wrap.chart-fine-spec-canvas-wrap {
-  min-height: 27.75rem; /* 111 × 4 px */
+  min-height: 25.25rem; /* 101 × 4 px */
 }
 
 #chartFineLfSpecStrip .chart-spec-y.chart-fine-spec-y,
 #chartFineLfSpecStrip .chart-spec-canvas-wrap.chart-fine-spec-canvas-wrap {
-  min-height: 11.5rem; /* 46 × 4 px — nesdílet výšku 190–300 Hz */
+  min-height: 11.5rem; /* 46 × 4 px — nesdílet výšku 170–270 Hz */
 }
 
 .chart-spec-bars {

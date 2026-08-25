@@ -132,7 +132,7 @@ SPECTRUM_HZ: tuple[float, ...] = (
 )
 SPECTRUM_METRICS: tuple[str, ...] = tuple(f"oct_{b}" for b in SPECTRUM_BANDS)
 
-# High-res FFT 190–300 Hz (1 Hz bins → spectrum_fine_3s)
+# High-res FFT 170–270 Hz (1 Hz bins → spectrum_fine_3s)
 FINE_SPECTRUM_HZ: tuple[float, ...] = tuple(float(hz) for hz in storage.FINE_FFT_HZ)
 FINE_SPECTRUM_BANDS: tuple[str, ...] = storage.FINE_FFT_BANDS
 FINE_SPECTRUM_LABELS: tuple[str, ...] = tuple(
@@ -453,7 +453,7 @@ class IngestPayload(BaseModel):
     lamin_1min: Optional[float] = None
     # 17 pásem: 1/3-oktáva 25–250 Hz + oktávy výš
     spectrum: Optional[list[float]] = Field(default=None, max_length=17)
-    # High-res FFT 190–300 Hz (111 × 1 Hz); kind=spectrum_fine
+    # High-res FFT 170–270 Hz (101 × 1 Hz); kind=spectrum_fine
     spectrum_fine: Optional[list[float]] = Field(
         default=None, max_length=max(storage.FINE_FFT_INGEST_LAYOUTS)
     )
@@ -1347,7 +1347,7 @@ def spectrum_fine_history(
     device_id: str = Query(default="hlukomer"),
     max_columns: int = Query(default=360, ge=10, le=2000),
 ) -> dict[str, Any]:
-    """Heatmapa high-res FFT 190–300 Hz (1 Hz bins, 3 s energy average)."""
+    """Heatmapa high-res FFT 170–270 Hz (1 Hz bins, 3 s energy average)."""
     now = utc_now()
     span = hours * 3600
     if start is None:
@@ -1398,7 +1398,7 @@ def spectrum_fine_history(
         "offline": offline,
         "storage": storage_info,
         "note": (
-            "High-res FFT 190–300 Hz (Δf=1 Hz). "
+            "High-res FFT 170–270 Hz (Δf=1 Hz). "
             "Sloupec ≈ 3 s energy average. Trvalá čára = tonální složka."
         ),
     }

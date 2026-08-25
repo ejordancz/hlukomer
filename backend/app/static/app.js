@@ -62,8 +62,8 @@ const SPEC_VIRIDIS_STOPS = [
   [0.75, [94, 201, 98]],
   [1.0, [253, 231, 37]],
 ];
-/** High-res FFT 190–300 Hz — 111 × 1 Hz bin; kompaktní heatmapa. */
-const FINE_SPEC_N_BINS = 111;
+/** High-res FFT 170–270 Hz — 101 × 1 Hz bin; kompaktní heatmapa. */
+const FINE_SPEC_N_BINS = 101;
 /** High-res FFT 25–70 Hz — 46 × 1 Hz bin. */
 const FINE_LF_SPEC_N_BINS = 46;
 /** Výška jednoho 1 Hz řádku v heatmapě (px) — celé spektrum musí být vidět. */
@@ -3188,7 +3188,7 @@ function drawChartFineSpectrogram() {
     height,
     data,
     emptyText: "High-res FFT…",
-    // 111 × 1 Hz — každých 5 Hz (190, 195, … 300).
+    // 101 × 1 Hz — každých 5 Hz (170, 175, … 270).
     yLabelFn: (lab, hz) => {
       const h = Number(hz);
       if (!Number.isFinite(h) || Math.round(h) % 5 !== 0) return "";
