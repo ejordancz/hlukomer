@@ -621,9 +621,13 @@ function clearFineSpecUi() {
   if (yEl) {
     yEl.innerHTML = "";
     yEl.style.height = "";
+    yEl.style.minHeight = "";
   }
   const wrap = $("chartFineSpecCanvasWrap");
-  if (wrap) wrap.style.height = "";
+  if (wrap) {
+    wrap.style.height = "";
+    wrap.style.minHeight = "";
+  }
   hideFineSpecCursorReadout();
 }
 
@@ -633,9 +637,13 @@ function clearFineLfSpecUi() {
   if (yEl) {
     yEl.innerHTML = "";
     yEl.style.height = "";
+    yEl.style.minHeight = "";
   }
   const wrap = $("chartFineLfSpecCanvasWrap");
-  if (wrap) wrap.style.height = "";
+  if (wrap) {
+    wrap.style.height = "";
+    wrap.style.minHeight = "";
+  }
   hideFineSpecCursorReadout();
 }
 
@@ -3060,11 +3068,11 @@ function drawHeatmapSpectrogram({
   layoutChartSpecStrip();
   const host = wrap || strip;
   const w = Math.max(40, Math.floor(host.clientWidth || 0));
-  const h = height;
+  const h = Math.max(1, Math.round(Number(height) || host.clientHeight || 0));
   canvas.width = w * devicePixelRatio;
   canvas.height = h * devicePixelRatio;
-  canvas.style.width = `${w}px`;
-  canvas.style.height = `${h}px`;
+  canvas.style.width = "100%";
+  canvas.style.height = "100%";
   const ctx = canvas.getContext("2d");
   ctx.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0);
 
@@ -3178,8 +3186,14 @@ function drawChartFineSpectrogram() {
   const height = fineSpecHeight(nBands);
   const yEl = $("chartFineSpecYLabels");
   const wrap = $("chartFineSpecCanvasWrap");
-  if (yEl) yEl.style.height = `${height}px`;
-  if (wrap) wrap.style.height = `${height}px`;
+  if (yEl) {
+    yEl.style.minHeight = "0";
+    yEl.style.height = `${height}px`;
+  }
+  if (wrap) {
+    wrap.style.minHeight = "0";
+    wrap.style.height = `${height}px`;
+  }
   drawHeatmapSpectrogram({
     canvasId: "chartFineSpectrogram",
     stripId: "chartFineSpecStrip",
@@ -3206,8 +3220,14 @@ function drawChartFineLfSpectrogram() {
   const height = fineSpecHeight(nBands);
   const yEl = $("chartFineLfSpecYLabels");
   const wrap = $("chartFineLfSpecCanvasWrap");
-  if (yEl) yEl.style.height = `${height}px`;
-  if (wrap) wrap.style.height = `${height}px`;
+  if (yEl) {
+    yEl.style.minHeight = "0";
+    yEl.style.height = `${height}px`;
+  }
+  if (wrap) {
+    wrap.style.minHeight = "0";
+    wrap.style.height = `${height}px`;
+  }
   drawHeatmapSpectrogram({
     canvasId: "chartFineLfSpectrogram",
     stripId: "chartFineLfSpecStrip",
