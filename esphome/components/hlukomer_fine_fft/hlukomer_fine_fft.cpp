@@ -63,25 +63,29 @@ void HlukomerFineFft::setup() {
   this->mic_source_->add_data_callback(
       [this](const std::vector<uint8_t> &data) { this->on_audio_(data); });
 
-  // Core 0: I2S/SLM typically runs on core 1 — don't stall the ring buffer.
-  const BaseType_t ok = xTaskCreatePinnedToCore(
+  // Core 0: I2S/SLM typically runs on core 1 — keep HTTP/DSP off that core.
+  BaseType_t ok = xTaskCreatePinnedToCore(
       [](void *arg) { static_cast<HlukomerFineFft *>(arg)->dsp_loop_(); }, "fine_fft", 6144,
-      this, tskIDLE_PRIORITY + 1, &this->dsp_task_, 0);
+      this, tskIDLE_PRIORITY + 2, &this->dsp_task_, 0);
   if (ok != pdPASS) {
     ESP_LOGE(TAG, "DSP task create failed");
     this->mark_failed();
     return;
   }
+  ok = xTaskCreatePinnedToCore(
+      [](void *arg) { static_cast<HlukomerFineFft *>(arg)->post_loop_(); }, "fine_fft_http", 8192,
+      this, tskIDLE_PRIORITY + 1, &this->post_task_, 0);
+  if (ok != pdPASS) {
+    ESP_LOGE(TAG, "HTTP task create failed");
+    this->mark_failed();
+    return;
+  }
+  this->disable_loop();
 
   ESP_LOGI(TAG,
            "Goertzel DFT %d–%d + %d–%d Hz (%d bins, off-I2S), decim %d→%d Hz, integrate %ds",
            FINE_F0_HZ, FINE_F1_HZ, FINE_LF_F0_HZ, FINE_LF_F1_HZ, FINE_ALL_N_BINS, FINE_FS,
            FINE_FS_DEC, FINE_INTEGRATE_FRAMES);
-}
-
-void HlukomerFineFft::loop() {
-  if (this->post_pending_.exchange(false, std::memory_order_acquire))
-    this->maybe_post_();
 }
 
 bool HlukomerFineFft::queue_push_(float x) {
@@ -207,20 +211,29 @@ void HlukomerFineFft::finish_frame_() {
     for (int b = 0; b < FINE_ALL_N_BINS; b++)
       this->power_acc_[b] = 0.0f;
     this->frames_ready_ = 0;
-    this->post_pending_.store(true, std::memory_order_release);
+    if (this->post_busy_.load(std::memory_order_acquire))
+      return;
+    memcpy(this->post_db_, this->pending_db_, sizeof(this->post_db_));
+    memcpy(this->post_db_lf_, this->pending_db_lf_, sizeof(this->post_db_lf_));
+    this->post_busy_.store(true, std::memory_order_release);
+    if (this->post_task_ != nullptr)
+      xTaskNotifyGive(this->post_task_);
   }
 }
 
-void HlukomerFineFft::maybe_post_() {
-  const uint32_t drops = this->drops_.exchange(0, std::memory_order_relaxed);
-  if (drops > 0)
-    ESP_LOGW(TAG, "Dropped %u decimated samples (DSP behind)", drops);
-  // dB conversion on the main loop — log10f on the I2S/SLM task (core 1) panicked.
-  for (int b = 0; b < FINE_N_BINS; b++)
-    this->pending_db_[b] = power_to_db(this->pending_db_[b], this->spl_offset_);
-  for (int b = 0; b < FINE_LF_N_BINS; b++)
-    this->pending_db_lf_[b] = power_to_db(this->pending_db_lf_[b], this->spl_offset_);
-  this->post_json_(this->pending_db_, this->pending_db_lf_);
+void HlukomerFineFft::post_loop_() {
+  for (;;) {
+    ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+    const uint32_t drops = this->drops_.exchange(0, std::memory_order_relaxed);
+    if (drops > 0)
+      ESP_LOGW(TAG, "Dropped %u decimated samples (DSP behind)", static_cast<unsigned>(drops));
+    for (int b = 0; b < FINE_N_BINS; b++)
+      this->post_db_[b] = power_to_db(this->post_db_[b], this->spl_offset_);
+    for (int b = 0; b < FINE_LF_N_BINS; b++)
+      this->post_db_lf_[b] = power_to_db(this->post_db_lf_[b], this->spl_offset_);
+    this->post_json_(this->post_db_, this->post_db_lf_);
+    this->post_busy_.store(false, std::memory_order_release);
+  }
 }
 
 bool HlukomerFineFft::post_json_(const float *db, const float *db_lf) {
@@ -258,7 +271,7 @@ bool HlukomerFineFft::post_json_(const float *db, const float *db_lf) {
   esp_http_client_config_t config = {};
   config.url = this->api_url_.c_str();
   config.method = HTTP_METHOD_POST;
-  config.timeout_ms = 4000;
+  config.timeout_ms = 2000;
 
   esp_http_client_handle_t client = esp_http_client_init(&config);
   if (client == nullptr) {

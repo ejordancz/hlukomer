@@ -51,15 +51,14 @@ class HlukomerFineFft : public Component {
   void set_gain_factor(int32_t gain) { this->gain_factor_ = gain; }
 
   void setup() override;
-  void loop() override;
   float get_setup_priority() const override { return setup_priority::LATE; }
 
  protected:
   void on_audio_(const std::vector<uint8_t> &data);
   void dsp_loop_();
+  void post_loop_();
   void process_decimated_(float xd);
   void finish_frame_();
-  void maybe_post_();
   bool post_json_(const float *db, const float *db_lf);
   bool queue_push_(float x);
   bool queue_pop_(float *x);
@@ -83,16 +82,18 @@ class HlukomerFineFft : public Component {
   std::atomic<uint16_t> q_w_{0};
   std::atomic<uint16_t> q_r_{0};
   TaskHandle_t dsp_task_{nullptr};
+  TaskHandle_t post_task_{nullptr};
   std::atomic<uint32_t> drops_{0};
 
   int64_t decim_acc_{0};
   int decim_n_{0};
   int sample_i_{0};
   int frames_ready_{0};
-  std::atomic<bool> post_pending_{false};
-  // Linear power after a 3 s integrate; converted to dB in maybe_post_().
+  std::atomic<bool> post_busy_{false};
   float pending_db_[FINE_N_BINS]{};
   float pending_db_lf_[FINE_LF_N_BINS]{};
+  float post_db_[FINE_N_BINS]{};
+  float post_db_lf_[FINE_LF_N_BINS]{};
 };
 
 }  // namespace hlukomer_fine_fft

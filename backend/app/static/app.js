@@ -1796,7 +1796,7 @@ function initChart() {
     },
     options: {
       responsive: true,
-      maintainAspectRatio: true,
+      maintainAspectRatio: false,
       animation: { duration: 450 },
       // Tooltip řídíme sami (graf / spektrogram / letadlo) — bez native mouseout.
       events: [],
