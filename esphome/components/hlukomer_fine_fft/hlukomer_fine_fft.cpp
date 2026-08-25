@@ -48,9 +48,13 @@ void HlukomerFineFft::setup() {
   const float two_pi = 6.283185307179586f;
   const float fs_dec = static_cast<float>(FINE_FS_DEC);
   const float n_fft_f = static_cast<float>(FINE_N_FFT);
-  for (int i = 0; i < FINE_ALL_N_BINS; i++) {
-    const float freq = static_cast<float>(FINE_ALL_F0_HZ + i);
+  for (int i = 0; i < FINE_LF_N_BINS; i++) {
+    const float freq = static_cast<float>(FINE_LF_F0_HZ + i);
     this->coeff_[i] = 2.0f * cosf(two_pi * freq / fs_dec);
+  }
+  for (int i = 0; i < FINE_N_BINS; i++) {
+    const float freq = static_cast<float>(FINE_F0_HZ + i);
+    this->coeff_[FINE_HF_OFFSET + i] = 2.0f * cosf(two_pi * freq / fs_dec);
   }
   for (int i = 0; i < FINE_N_FFT; i++)
     this->hann_[i] = 0.5f - 0.5f * cosf(two_pi * static_cast<float>(i) / n_fft_f);

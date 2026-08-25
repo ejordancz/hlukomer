@@ -43,12 +43,12 @@ SPECTRUM_BANDS: tuple[str, ...] = (
 )
 SPECTRUM_COLS: tuple[str, ...] = tuple(f"oct_{b}" for b in SPECTRUM_BANDS)
 
-# High-res FFT 150–270 Hz (1 Hz bins, 3 s energy average → spectrum_fine_3s).
-FINE_FFT_F0_HZ = 150
-FINE_FFT_F1_HZ = 270
+# High-res FFT 190–300 Hz (1 Hz bins, 3 s energy average → spectrum_fine_3s).
+FINE_FFT_F0_HZ = 190
+FINE_FFT_F1_HZ = 300
 FINE_FFT_DF_HZ = 1.0
 FINE_FFT_INTEGRATE_S = 3
-FINE_FFT_N_BINS = FINE_FFT_F1_HZ - FINE_FFT_F0_HZ + 1  # 121
+FINE_FFT_N_BINS = FINE_FFT_F1_HZ - FINE_FFT_F0_HZ + 1  # 111
 FINE_FFT_HZ: tuple[int, ...] = tuple(
     range(FINE_FFT_F0_HZ, FINE_FFT_F1_HZ + 1, int(FINE_FFT_DF_HZ))
 )
@@ -56,32 +56,43 @@ FINE_FFT_BANDS: tuple[str, ...] = tuple(str(hz) for hz in FINE_FFT_HZ)
 FINE_FFT_DB0 = 0.0
 FINE_FFT_DB_STEP = 0.5
 
-# High-res FFT 25–150 Hz (same packing / 3 s → spectrum_fine_lf_3s; oddělená historie).
+# High-res FFT 25–70 Hz (same packing / 3 s → spectrum_fine_lf_3s; oddělená historie).
 FINE_LF_FFT_F0_HZ = 25
-FINE_LF_FFT_F1_HZ = 150
-FINE_LF_FFT_N_BINS = FINE_LF_FFT_F1_HZ - FINE_LF_FFT_F0_HZ + 1  # 126
+FINE_LF_FFT_F1_HZ = 70
+FINE_LF_FFT_N_BINS = FINE_LF_FFT_F1_HZ - FINE_LF_FFT_F0_HZ + 1  # 46
 FINE_LF_FFT_HZ: tuple[int, ...] = tuple(
     range(FINE_LF_FFT_F0_HZ, FINE_LF_FFT_F1_HZ + 1, int(FINE_FFT_DF_HZ))
 )
 FINE_LF_FFT_BANDS: tuple[str, ...] = tuple(str(hz) for hz in FINE_LF_FFT_HZ)
 
-# Předchozí firmware (190–270 / 150–300 / 25–70) — ingest i čtení bez přepisu blobů.
+# Předchozí firmware — ingest i čtení bez přepisu blobů.
 LEGACY_FINE_FFT_F0_HZ = 190
 LEGACY_FINE_FFT_F1_HZ = 270
 LEGACY_FINE_FFT_N_BINS = LEGACY_FINE_FFT_F1_HZ - LEGACY_FINE_FFT_F0_HZ + 1  # 81
+LEGACY_FINE_FFT_MID_F0_HZ = 150
+LEGACY_FINE_FFT_MID_F1_HZ = 270
+LEGACY_FINE_FFT_MID_N_BINS = (
+    LEGACY_FINE_FFT_MID_F1_HZ - LEGACY_FINE_FFT_MID_F0_HZ + 1
+)  # 121
 LEGACY_FINE_FFT_WIDE_F0_HZ = 150
 LEGACY_FINE_FFT_WIDE_F1_HZ = 300
 LEGACY_FINE_FFT_WIDE_N_BINS = (
     LEGACY_FINE_FFT_WIDE_F1_HZ - LEGACY_FINE_FFT_WIDE_F0_HZ + 1
 )  # 151
-LEGACY_FINE_LF_FFT_F0_HZ = 25
-LEGACY_FINE_LF_FFT_F1_HZ = 70
-LEGACY_FINE_LF_FFT_N_BINS = LEGACY_FINE_LF_FFT_F1_HZ - LEGACY_FINE_LF_FFT_F0_HZ + 1  # 46
+LEGACY_FINE_LF_FFT_WIDE_F0_HZ = 25
+LEGACY_FINE_LF_FFT_WIDE_F1_HZ = 150
+LEGACY_FINE_LF_FFT_WIDE_N_BINS = (
+    LEGACY_FINE_LF_FFT_WIDE_F1_HZ - LEGACY_FINE_LF_FFT_WIDE_F0_HZ + 1
+)  # 126
 
 # n_bins → (f0_hz, f1_hz) pro ingest; původní payload se nemění.
 FINE_FFT_INGEST_LAYOUTS: dict[int, tuple[int, int]] = {
     FINE_FFT_N_BINS: (FINE_FFT_F0_HZ, FINE_FFT_F1_HZ),
     LEGACY_FINE_FFT_N_BINS: (LEGACY_FINE_FFT_F0_HZ, LEGACY_FINE_FFT_F1_HZ),
+    LEGACY_FINE_FFT_MID_N_BINS: (
+        LEGACY_FINE_FFT_MID_F0_HZ,
+        LEGACY_FINE_FFT_MID_F1_HZ,
+    ),
     LEGACY_FINE_FFT_WIDE_N_BINS: (
         LEGACY_FINE_FFT_WIDE_F0_HZ,
         LEGACY_FINE_FFT_WIDE_F1_HZ,
@@ -89,7 +100,10 @@ FINE_FFT_INGEST_LAYOUTS: dict[int, tuple[int, int]] = {
 }
 FINE_LF_FFT_INGEST_LAYOUTS: dict[int, tuple[int, int]] = {
     FINE_LF_FFT_N_BINS: (FINE_LF_FFT_F0_HZ, FINE_LF_FFT_F1_HZ),
-    LEGACY_FINE_LF_FFT_N_BINS: (LEGACY_FINE_LF_FFT_F0_HZ, LEGACY_FINE_LF_FFT_F1_HZ),
+    LEGACY_FINE_LF_FFT_WIDE_N_BINS: (
+        LEGACY_FINE_LF_FFT_WIDE_F0_HZ,
+        LEGACY_FINE_LF_FFT_WIDE_F1_HZ,
+    ),
 }
 
 # Staré IIR wide sloupce (drop bez náhrady).
@@ -622,7 +636,7 @@ def fetch_spectrum_fine_columns_raw(
     t_start: float,
     t_end: float,
 ) -> list[tuple[float, list[Optional[float]]]]:
-    """(t_mid, values na 150–270 Hz) z spectrum_fine_3s; t_mid = bucket_start + 1.5 s."""
+    """(t_mid, values na 190–300 Hz) z spectrum_fine_3s; t_mid = bucket_start + 1.5 s."""
     return _fetch_fine_fft_columns_raw(
         conn,
         "spectrum_fine_3s",
@@ -640,7 +654,7 @@ def fetch_spectrum_fine_lf_columns_raw(
     t_start: float,
     t_end: float,
 ) -> list[tuple[float, list[Optional[float]]]]:
-    """(t_mid, values na 25–150 Hz) z spectrum_fine_lf_3s; t_mid = bucket_start + 1.5 s."""
+    """(t_mid, values na 25–70 Hz) z spectrum_fine_lf_3s; t_mid = bucket_start + 1.5 s."""
     return _fetch_fine_fft_columns_raw(
         conn,
         "spectrum_fine_lf_3s",
@@ -648,7 +662,7 @@ def fetch_spectrum_fine_lf_columns_raw(
         t_start,
         t_end,
         target_hz=FINE_LF_FFT_HZ,
-        default_f0_hz=float(LEGACY_FINE_LF_FFT_F0_HZ),
+        default_f0_hz=float(FINE_LF_FFT_F0_HZ),
     )
 
 

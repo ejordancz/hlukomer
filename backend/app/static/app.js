@@ -62,10 +62,10 @@ const SPEC_VIRIDIS_STOPS = [
   [0.75, [94, 201, 98]],
   [1.0, [253, 231, 37]],
 ];
-/** High-res FFT 150–270 Hz — 121 × 1 Hz bin; kompaktní heatmapa. */
-const FINE_SPEC_N_BINS = 121;
-/** High-res FFT 25–150 Hz — 126 × 1 Hz bin. */
-const FINE_LF_SPEC_N_BINS = 126;
+/** High-res FFT 190–300 Hz — 111 × 1 Hz bin; kompaktní heatmapa. */
+const FINE_SPEC_N_BINS = 111;
+/** High-res FFT 25–70 Hz — 46 × 1 Hz bin. */
+const FINE_LF_SPEC_N_BINS = 46;
 /** Výška jednoho 1 Hz řádku v heatmapě (px) — celé spektrum musí být vidět. */
 const CHART_FINE_SPEC_ROW_H = 4;
 /** Výška grafu překročení limitu (~1/4 spektrogramu). */
@@ -3188,7 +3188,7 @@ function drawChartFineSpectrogram() {
     height,
     data,
     emptyText: "High-res FFT…",
-    // 121 × 1 Hz — každých 5 Hz (150, 155, … 270).
+    // 111 × 1 Hz — každých 5 Hz (190, 195, … 300).
     yLabelFn: (lab, hz) => {
       const h = Number(hz);
       if (!Number.isFinite(h) || Math.round(h) % 5 !== 0) return "";
@@ -3216,7 +3216,7 @@ function drawChartFineLfSpectrogram() {
     height,
     data,
     emptyText: "High-res FFT LF…",
-    // 126 × 1 Hz — každých 5 Hz (25, 30, … 150).
+    // 46 × 1 Hz — každých 5 Hz (25, 30, … 70).
     yLabelFn: (lab, hz) => {
       const h = Number(hz);
       if (!Number.isFinite(h) || Math.round(h) % 5 !== 0) return "";

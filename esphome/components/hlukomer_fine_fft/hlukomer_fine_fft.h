@@ -16,20 +16,18 @@
 namespace esphome {
 namespace hlukomer_fine_fft {
 
-static const int FINE_F0_HZ = 150;
-static const int FINE_F1_HZ = 270;
-static const int FINE_N_BINS = FINE_F1_HZ - FINE_F0_HZ + 1;  // 121
+static const int FINE_F0_HZ = 190;
+static const int FINE_F1_HZ = 300;
+static const int FINE_N_BINS = FINE_F1_HZ - FINE_F0_HZ + 1;  // 111
 
-/** Low-band fine FFT: 25–150 Hz (1/3-oktáva floor … under mains/HVAC tones). */
+/** Low-band fine FFT: 25–70 Hz (mains / HVAC floor). */
 static const int FINE_LF_F0_HZ = 25;
-static const int FINE_LF_F1_HZ = 150;
-static const int FINE_LF_N_BINS = FINE_LF_F1_HZ - FINE_LF_F0_HZ + 1;  // 126
+static const int FINE_LF_F1_HZ = 70;
+static const int FINE_LF_N_BINS = FINE_LF_F1_HZ - FINE_LF_F0_HZ + 1;  // 46
 
-/** One Goertzel bank covering both spectrograms (150 Hz shared). */
-static const int FINE_ALL_F0_HZ = FINE_LF_F0_HZ;
-static const int FINE_ALL_F1_HZ = FINE_F1_HZ;
-static const int FINE_ALL_N_BINS = FINE_ALL_F1_HZ - FINE_ALL_F0_HZ + 1;  // 246
-static const int FINE_HF_OFFSET = FINE_F0_HZ - FINE_ALL_F0_HZ;           // 125
+/** Packed Goertzel: LF then HF (gap 71–189 Hz is not computed). */
+static const int FINE_HF_OFFSET = FINE_LF_N_BINS;
+static const int FINE_ALL_N_BINS = FINE_N_BINS + FINE_LF_N_BINS;  // 157
 
 static const int FINE_FS = 48000;
 /** Boxcar decimate 48 kHz → 4 kHz so Goertzel fits next to SLM on ESP32-S3. */
@@ -39,7 +37,7 @@ static const int FINE_N_FFT = FINE_FS_DEC;            // Δf = 1 Hz, 1 s window
 static const int FINE_INTEGRATE_FRAMES = 3;
 static const int FINE_Q_LEN = 512;  // 128 ms @ 4 kHz, power of 2
 
-/** High-res 150–270 + 25–150 Hz: Goertzel off the I2S/SLM task, 3 s energy avg → HTTP. */
+/** High-res 190–300 + 25–70 Hz: Goertzel off the I2S/SLM task, 3 s energy avg → HTTP. */
 class HlukomerFineFft : public Component {
  public:
   void set_microphone(microphone::Microphone *mic) { this->mic_ = mic; }

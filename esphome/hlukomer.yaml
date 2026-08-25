@@ -2,7 +2,7 @@
 # Flash: esphome run esphome/hlukomer.yaml
 # Secrets: esphome/secrets.yaml (viz secrets.yaml.example)
 # Spektrum: 1/3-oktáva 25–250 Hz + oktávy 500 Hz–16 kHz; LZeq; LFI 20–200 Hz
-# High-res FFT 150–270 + 25–150 Hz: Goertzel DFT 1 Hz (decim 48→4 kHz) → POST kind=spectrum_fine / 3 s
+# High-res FFT 190–300 + 25–70 Hz: Goertzel DFT 1 Hz (decim 48→4 kHz) → POST kind=spectrum_fine / 3 s
 
 substitutions:
   device_name: hlukomer
@@ -21,7 +21,7 @@ esp32:
   framework:
     type: esp-idf
 
-# A-vážení, LAeq/LZeq, LFI, 1/3-oktáva + oktávové spektrum; high-res FFT 150–270 + 25–150
+# A-vážení, LAeq/LZeq, LFI, 1/3-oktáva + oktávové spektrum; high-res FFT 190–300 + 25–70
 external_components:
   - source: github://stas-sl/esphome-sound-level-meter@dev
     components: [sound_level_meter]
@@ -77,7 +77,7 @@ microphone:
     channel: left
     i2s_mode: primary
 
-# High-res FFT 150–270 + 25–150 Hz (Goertzel ≡ FFT bins @ 1 Hz, decim 4 kHz), POST každých 3 s
+# High-res FFT 190–300 + 25–70 Hz (Goertzel ≡ FFT bins @ 1 Hz, decim 4 kHz), POST každých 3 s
 hlukomer_fine_fft:
   microphone: mic
   api_url: ${api_base_url}/api/v1/ingest
