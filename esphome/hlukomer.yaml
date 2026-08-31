@@ -50,7 +50,7 @@ logger:
   level: INFO
   logs:
     # CPU/ring-buffer stats are LOGD — need these to see overload before WDT
-    sound_level_meter: DEBUG
+    sound_level_meter: INFO
 
 api:
   encryption:
