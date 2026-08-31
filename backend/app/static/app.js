@@ -1,12 +1,6 @@
 const $ = (id) => document.getElementById(id);
 
 const SPECTRUM_FALLBACK = [
-  "25 Hz",
-  "31.5 Hz",
-  "40 Hz",
-  "50 Hz",
-  "63 Hz",
-  "80 Hz",
   "100 Hz",
   "125 Hz",
   "160 Hz",
@@ -21,12 +15,6 @@ const SPECTRUM_FALLBACK = [
 ];
 
 const SPECTRUM_BAND_IDS = [
-  "25",
-  "31",
-  "40",
-  "50",
-  "63",
-  "80",
   "100",
   "125",
   "160",
@@ -41,12 +29,6 @@ const SPECTRUM_BAND_IDS = [
 ];
 
 const LF_BANDS = new Set([
-  "25",
-  "31",
-  "40",
-  "50",
-  "63",
-  "80",
   "100",
   "125",
   "160",
@@ -62,8 +44,8 @@ const SPEC_VIRIDIS_STOPS = [
   [0.75, [94, 201, 98]],
   [1.0, [253, 231, 37]],
 ];
-/** High-res FFT 170–270 Hz — 101 × 1 Hz bin; kompaktní heatmapa. */
-const FINE_SPEC_N_BINS = 101;
+/** High-res FFT 150–270 Hz — 121 × 1 Hz bin; kompaktní heatmapa. */
+const FINE_SPEC_N_BINS = 121;
 /** High-res FFT 25–70 Hz — 46 × 1 Hz bin. */
 const FINE_LF_SPEC_N_BINS = 46;
 /** Výška jednoho 1 Hz řádku v heatmapě (px) — celé spektrum musí být vidět. */
@@ -768,8 +750,8 @@ function dominantHzFromSpecValues(values) {
   }
   if (bestI < 0) return null;
   if (hzList?.[bestI] != null) return Number(hzList[bestI]);
-  // Fallback podle pořadí pásem (25, 31.5, …).
-  const fallback = [25, 31.5, 40, 50, 63, 80, 100, 125, 160, 200, 250, 500, 1000, 2000, 4000, 8000, 16000];
+  // Fallback podle pořadí pásem (100, 125, …).
+  const fallback = [100, 125, 160, 200, 250, 500, 1000, 2000, 4000, 8000, 16000];
   return fallback[bestI] ?? null;
 }
 
@@ -3202,7 +3184,7 @@ function drawChartFineSpectrogram() {
     height,
     data,
     emptyText: "High-res FFT…",
-    // 101 × 1 Hz — každých 5 Hz (170, 175, … 270).
+    // 121 × 1 Hz — každých 5 Hz (150, 155, … 270).
     yLabelFn: (lab, hz) => {
       const h = Number(hz);
       if (!Number.isFinite(h) || Math.round(h) % 5 !== 0) return "";

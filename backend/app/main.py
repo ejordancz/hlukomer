@@ -92,14 +92,9 @@ TIANJI_TRACKER_SCRIPT = (
     'data-website-id="cms78kn1z0k4lurf4uhwzjzu7"></script>'
 )
 
-# Spektrum: 1/3-oktáva 25–250 Hz + oktávy 500 Hz–16 kHz (pořadí = ESP spectrum[])
+# Spektrum: 1/3-oktáva 100–250 Hz + oktávy 500 Hz–16 kHz (pořadí = ESP spectrum[])
+# Starý firmware posílal 17 hodnot (25–80 Hz prefix); ingest to ořízne.
 SPECTRUM_BANDS: tuple[str, ...] = (
-    "25",
-    "31",
-    "40",
-    "50",
-    "63",
-    "80",
     "100",
     "125",
     "160",
@@ -113,12 +108,6 @@ SPECTRUM_BANDS: tuple[str, ...] = (
     "16k",
 )
 SPECTRUM_LABELS: tuple[str, ...] = (
-    "25 Hz",
-    "31.5 Hz",
-    "40 Hz",
-    "50 Hz",
-    "63 Hz",
-    "80 Hz",
     "100 Hz",
     "125 Hz",
     "160 Hz",
@@ -132,12 +121,6 @@ SPECTRUM_LABELS: tuple[str, ...] = (
     "16 kHz",
 )
 SPECTRUM_HZ: tuple[float, ...] = (
-    25.0,
-    31.5,
-    40.0,
-    50.0,
-    63.0,
-    80.0,
     100.0,
     125.0,
     160.0,
@@ -152,7 +135,7 @@ SPECTRUM_HZ: tuple[float, ...] = (
 )
 SPECTRUM_METRICS: tuple[str, ...] = tuple(f"oct_{b}" for b in SPECTRUM_BANDS)
 
-# High-res FFT 170–270 Hz (1 Hz bins → spectrum_fine_3s)
+# High-res FFT 150–270 Hz (1 Hz bins → spectrum_fine_3s)
 FINE_SPECTRUM_HZ: tuple[float, ...] = tuple(float(hz) for hz in storage.FINE_FFT_HZ)
 FINE_SPECTRUM_BANDS: tuple[str, ...] = storage.FINE_FFT_BANDS
 FINE_SPECTRUM_LABELS: tuple[str, ...] = tuple(
@@ -164,7 +147,7 @@ FINE_LF_SPECTRUM_BANDS: tuple[str, ...] = storage.FINE_LF_FFT_BANDS
 FINE_LF_SPECTRUM_LABELS: tuple[str, ...] = tuple(
     f"{int(hz)} Hz" for hz in FINE_LF_SPECTRUM_HZ
 )
-# LFI ≈ 20–200 Hz → 1/3-oktávy 25…200 Hz
+# LFI ≈ 20–200 Hz → zbývající 1/3-oktávy 100…200 Hz (25–80 Hz jsou ve fine LF)
 LFI_BAND_INDEXES: tuple[int, ...] = tuple(
     i for i, hz in enumerate(SPECTRUM_HZ) if 20.0 <= hz <= 200.0
 )
@@ -471,9 +454,9 @@ class IngestPayload(BaseModel):
     laeq_1min: Optional[float] = None
     lamax_1min: Optional[float] = None
     lamin_1min: Optional[float] = None
-    # 17 pásem: 1/3-oktáva 25–250 Hz + oktávy výš
+    # 11 pásem: 1/3-oktáva 100–250 Hz + oktávy výš (starý ESP posílal 17 vč. 25–80 Hz)
     spectrum: Optional[list[float]] = Field(default=None, max_length=17)
-    # High-res FFT 170–270 Hz (101 × 1 Hz); kind=spectrum_fine
+    # High-res FFT 150–270 Hz (121 × 1 Hz); kind=spectrum_fine
     spectrum_fine: Optional[list[float]] = Field(
         default=None, max_length=max(storage.FINE_FFT_INGEST_LAYOUTS)
     )
@@ -484,6 +467,19 @@ class IngestPayload(BaseModel):
     )
     spectrum_fine_lf_meta: Optional[dict[str, Any]] = None
     ts: Optional[float] = None  # unix seconds; default = server time
+
+def _normalize_live_spectrum(values: list[float]) -> list[float]:
+    """11 pásem (nové ESP) nebo 17 s prefixem 25–80 Hz (starý firmware)."""
+    n = len(SPECTRUM_BANDS)
+    if len(values) == n:
+        return values
+    if len(values) == n + 6:
+        return values[6:]
+    raise HTTPException(
+        status_code=400,
+        detail=f"spectrum must have {n} or {n + 6} values, got {len(values)}",
+    )
+
 
 def utc_now() -> float:
     return time.time()
@@ -1097,12 +1093,9 @@ def ingest(payload: IngestPayload, _: None = Depends(require_api_key)) -> dict[s
         }
 
     spectrum_cols: Optional[tuple[str, ...]] = None
+    spectrum_values: Optional[list[float]] = None
     if payload.spectrum is not None:
-        if len(payload.spectrum) != len(SPECTRUM_BANDS):
-            raise HTTPException(
-                status_code=400,
-                detail=f"spectrum must have {len(SPECTRUM_BANDS)} values",
-            )
+        spectrum_values = _normalize_live_spectrum(payload.spectrum)
         spectrum_cols = SPECTRUM_METRICS
     if payload.spectrum_fine is not None:
         # Starý IIR firmware (17 hodnot) — ignorovat, ať nerozbije LAeq ingest.
@@ -1119,7 +1112,7 @@ def ingest(payload: IngestPayload, _: None = Depends(require_api_key)) -> dict[s
             laeq_1s=payload.laeq_1s,
             lez_1s=payload.lez_1s,
             lfi_db=payload.lfi_db,
-            spectrum=payload.spectrum,
+            spectrum=spectrum_values,
             spectrum_cols=spectrum_cols,
         )
         written += storage.upsert_minute(
@@ -1322,7 +1315,7 @@ def spectrum_history(
     bands = list(SPECTRUM_BANDS)
     labels = list(SPECTRUM_LABELS)
     hz = list(SPECTRUM_HZ)
-    note = "1/3-oktáva 25–250 Hz + oktávy výš (IIR). Trvalá čára = tón (např. 250 Hz nebo 50/63 Hz)."
+    note = "1/3-oktáva 100–250 Hz + oktávy výš (IIR). Bas 25–70 Hz je ve spodním FFT grafu."
     with db() as conn:
         offline = fetch_offline_stats(conn, device_id, t_start, t_end)
         storage_info = {
@@ -1367,7 +1360,7 @@ def spectrum_fine_history(
     device_id: str = Query(default="hlukomer"),
     max_columns: int = Query(default=360, ge=10, le=2000),
 ) -> dict[str, Any]:
-    """Heatmapa high-res FFT 170–270 Hz (1 Hz bins, 3 s energy average)."""
+    """Heatmapa high-res FFT 150–270 Hz (1 Hz bins, 3 s energy average)."""
     now = utc_now()
     span = hours * 3600
     if start is None:
@@ -1418,7 +1411,7 @@ def spectrum_fine_history(
         "offline": offline,
         "storage": storage_info,
         "note": (
-            "High-res FFT 170–270 Hz (Δf=1 Hz). "
+            "High-res FFT 150–270 Hz (Δf=1 Hz). "
             "Sloupec ≈ 3 s energy average. Trvalá čára = tonální složka."
         ),
     }

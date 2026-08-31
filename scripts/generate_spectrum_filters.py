@@ -16,12 +16,6 @@ from scipy.signal import butter
 
 FS = 48000
 BANDS = [
-    ("25", 25.0, "third"),
-    ("31", 31.5, "third"),
-    ("40", 40.0, "third"),
-    ("50", 50.0, "third"),
-    ("63", 63.0, "third"),
-    ("80", 80.0, "third"),
     ("100", 100.0, "third"),
     ("125", 125.0, "third"),
     ("160", 160.0, "third"),

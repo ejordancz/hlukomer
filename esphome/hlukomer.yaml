@@ -1,8 +1,9 @@
 # Hlukoměr — ESP32-S3 + Adafruit ICS-43434
 # Flash: esphome run esphome/hlukomer.yaml
 # Secrets: esphome/secrets.yaml (viz secrets.yaml.example)
-# Spektrum: 1/3-oktáva 25–250 Hz + oktávy 500 Hz–16 kHz; LZeq; LFI 20–200 Hz
-# High-res FFT 170–270 + 25–70 Hz: Goertzel DFT 1 Hz (decim 48→4 kHz) → POST kind=spectrum_fine / 3 s
+# Spektrum: 1/3-oktáva 100–250 Hz + oktávy 500 Hz–16 kHz; LZeq; LFI 20–200 Hz
+# (25–80 Hz IIR vypnuto — WDT; bas je v fine FFT 25–70 Hz)
+# High-res FFT 150–270 + 25–70 Hz: Goertzel DFT 1 Hz (decim 48→4 kHz) → POST kind=spectrum_fine / 3 s
 
 substitutions:
   device_name: hlukomer
@@ -20,8 +21,12 @@ esp32:
   cpu_frequency: 240MHz
   framework:
     type: esp-idf
+    # Default TWDT is 5s. SLM SOS on core 1 has no yield while the ring
+    # buffer is full; a DSP spike then never idles and the chip resets.
+    sdkconfig_options:
+      CONFIG_ESP_TASK_WDT_TIMEOUT_S: "15"
 
-# A-vážení, LAeq/LZeq, LFI, 1/3-oktáva + oktávové spektrum; high-res FFT 170–270 + 25–70
+# A-vážení, LAeq/LZeq, LFI, 1/3-oktáva + oktávové spektrum; high-res FFT 150–270 + 25–70
 external_components:
   - source: github://stas-sl/esphome-sound-level-meter@dev
     components: [sound_level_meter]
@@ -43,6 +48,9 @@ captive_portal:
 
 logger:
   level: INFO
+  logs:
+    # CPU/ring-buffer stats are LOGD — need these to see overload before WDT
+    sound_level_meter: DEBUG
 
 api:
   encryption:
@@ -77,7 +85,7 @@ microphone:
     channel: left
     i2s_mode: primary
 
-# High-res FFT 170–270 + 25–70 Hz (Goertzel ≡ FFT bins @ 1 Hz, decim 4 kHz), POST každých 3 s
+# High-res FFT 150–270 + 25–70 Hz (Goertzel ≡ FFT bins @ 1 Hz, decim 4 kHz), POST každých 3 s
 hlukomer_fine_fft:
   microphone: mic
   api_url: ${api_base_url}/api/v1/ingest
@@ -96,7 +104,9 @@ sound_level_meter:
   update_interval: 60s
   auto_start: true
   warmup_interval: 500ms
+  # Keep ESP-DSP (AES3). Default prio 2 starves idle/loopTask on core 1 → Task WDT.
   use_esp_dsp: true
+  task_priority: 1
   task_stack_size: 16384
   mic_sensitivity: -26dB
   mic_sensitivity_ref: 94dB
@@ -123,60 +133,6 @@ sound_level_meter:
         - [1.0, 2.0, 1.0, -1.9831511974334717, 0.9838031530380249]
         - [1.0, -2.0, 1.0, -1.994491696357727, 0.9945015907287598]
         - [1.0, -2.0, 1.0, -1.9982913732528687, 0.9982985258102417]
-    # 1/3-oktáva 25.0 Hz (22.3–28.1 Hz)
-    - id: f_band_25
-      type: sos
-      coeffs:
-        # third fc=25.0 order=4 @ 48 kHz
-        - [2.058940583131441e-14, 4.117881166262882e-14, 2.058940583131441e-14, -1.9992573261260986, 0.9992690086364746]
-        - [1.0, 2.0, 1.0, -1.999321460723877, 0.9993312954902649]
-        - [1.0, -2.0, 1.0, -1.9996659755706787, 0.9996792078018188]
-        - [1.0, -2.0, 1.0, -1.999732255935669, 0.9997408986091614]
-    # 1/3-oktáva 31.5 Hz (28.1–35.4 Hz)
-    - id: f_band_31
-      type: sos
-      coeffs:
-        # third fc=31.5 order=4 @ 48 kHz
-        - [5.1881706531831454e-14, 1.0376341306366291e-13, 5.1881706531831454e-14, -1.9990603923797607, 0.9990790486335754]
-        - [1.0, 2.0, 1.0, -1.9991419315338135, 0.9991574883460999]
-        - [1.0, -2.0, 1.0, -1.9995747804641724, 0.9995957612991333]
-        - [1.0, -2.0, 1.0, -1.999659776687622, 0.9996735453605652]
-    # 1/3-oktáva 40.0 Hz (35.6–44.9 Hz)
-    - id: f_band_40
-      type: sos
-      coeffs:
-        # third fc=40.0 order=4 @ 48 kHz
-        - [1.3485463830689715e-13, 2.697092766137943e-13, 1.3485463830689715e-13, -1.9988006353378296, 0.9988306760787964]
-        - [1.0, 2.0, 1.0, -1.9989051818847656, 0.9989302754402161]
-        - [1.0, -2.0, 1.0, -1.999452829360962, 0.9994867444038391]
-        - [1.0, -2.0, 1.0, -1.9995633363723755, 0.9995855093002319]
-    # 1/3-oktáva 50.0 Hz (44.5–56.1 Hz)
-    - id: f_band_50
-      type: sos
-      coeffs:
-        # third fc=50.0 order=4 @ 48 kHz
-        - [3.2910466344314437e-13, 6.582093268862887e-13, 3.2910466344314437e-13, -1.9984917640686035, 0.9985384941101074]
-        - [1.0, 2.0, 1.0, -1.9986238479614258, 0.9986630082130432]
-        - [1.0, -2.0, 1.0, -1.9993054866790771, 0.9993584752082825]
-        - [1.0, -2.0, 1.0, -1.9994473457336426, 0.9994819164276123]
-    # 1/3-oktáva 63.0 Hz (56.1–70.7 Hz)
-    - id: f_band_63
-      type: sos
-      coeffs:
-        # third fc=63.0 order=4 @ 48 kHz
-        - [8.290730840569693e-13, 1.6581461681139387e-12, 8.290730840569693e-13, -1.9980846643447876, 0.998158872127533]
-        - [1.0, 2.0, 1.0, -1.998253583908081, 0.998315691947937]
-        - [1.0, -2.0, 1.0, -1.9991075992584229, 0.9991917610168457]
-        - [1.0, -2.0, 1.0, -1.9992923736572266, 0.9993472099304199]
-    # 1/3-oktáva 80.0 Hz (71.3–89.8 Hz)
-    - id: f_band_80
-      type: sos
-      coeffs:
-        # third fc=80.0 order=4 @ 48 kHz
-        - [2.154262011833108e-12, 4.308524023666216e-12, 2.154262011833108e-12, -1.9975429773330688, 0.9976626634597778]
-        - [1.0, 2.0, 1.0, -1.9977614879608154, 0.9978616833686829]
-        - [1.0, -2.0, 1.0, -1.9988380670547485, 0.9989737272262573]
-        - [1.0, -2.0, 1.0, -1.9990826845169067, 0.9991711378097534]
     # 1/3-oktáva 100.0 Hz (89.1–112.2 Hz)
     - id: f_band_100
       type: sos
@@ -310,23 +266,17 @@ sound_level_meter:
                 root["laeq_1s"] = x;
                 root["lez_1s"] = id(lez_1s).state;
                 root["lfi_db"] = id(lfi_db).state;
-                root["spectrum"][0] = id(oct_25).state;
-                root["spectrum"][1] = id(oct_31).state;
-                root["spectrum"][2] = id(oct_40).state;
-                root["spectrum"][3] = id(oct_50).state;
-                root["spectrum"][4] = id(oct_63).state;
-                root["spectrum"][5] = id(oct_80).state;
-                root["spectrum"][6] = id(oct_100).state;
-                root["spectrum"][7] = id(oct_125).state;
-                root["spectrum"][8] = id(oct_160).state;
-                root["spectrum"][9] = id(oct_200).state;
-                root["spectrum"][10] = id(oct_250).state;
-                root["spectrum"][11] = id(oct_500).state;
-                root["spectrum"][12] = id(oct_1k).state;
-                root["spectrum"][13] = id(oct_2k).state;
-                root["spectrum"][14] = id(oct_4k).state;
-                root["spectrum"][15] = id(oct_8k).state;
-                root["spectrum"][16] = id(oct_16k).state;
+                root["spectrum"][0] = id(oct_100).state;
+                root["spectrum"][1] = id(oct_125).state;
+                root["spectrum"][2] = id(oct_160).state;
+                root["spectrum"][3] = id(oct_200).state;
+                root["spectrum"][4] = id(oct_250).state;
+                root["spectrum"][5] = id(oct_500).state;
+                root["spectrum"][6] = id(oct_1k).state;
+                root["spectrum"][7] = id(oct_2k).state;
+                root["spectrum"][8] = id(oct_4k).state;
+                root["spectrum"][9] = id(oct_8k).state;
+                root["spectrum"][10] = id(oct_16k).state;
 
     - type: eq
       name: LZeq 1s
@@ -384,49 +334,7 @@ sound_level_meter:
       update_interval: 60s
       dsp_filters: [f_ics43434, f_a]
 
-    # Spektrum: 1/3-oktáva 25–250 Hz + oktávy 500 Hz–16 kHz (bez A-vážení)
-    - type: eq
-      name: 25 Hz
-      id: oct_25
-      unit_of_measurement: dB
-      accuracy_decimals: 1
-      update_interval: 1s
-      dsp_filters: [f_ics43434, f_band_25]
-    - type: eq
-      name: 31.5 Hz
-      id: oct_31
-      unit_of_measurement: dB
-      accuracy_decimals: 1
-      update_interval: 1s
-      dsp_filters: [f_ics43434, f_band_31]
-    - type: eq
-      name: 40 Hz
-      id: oct_40
-      unit_of_measurement: dB
-      accuracy_decimals: 1
-      update_interval: 1s
-      dsp_filters: [f_ics43434, f_band_40]
-    - type: eq
-      name: 50 Hz
-      id: oct_50
-      unit_of_measurement: dB
-      accuracy_decimals: 1
-      update_interval: 1s
-      dsp_filters: [f_ics43434, f_band_50]
-    - type: eq
-      name: 63 Hz
-      id: oct_63
-      unit_of_measurement: dB
-      accuracy_decimals: 1
-      update_interval: 1s
-      dsp_filters: [f_ics43434, f_band_63]
-    - type: eq
-      name: 80 Hz
-      id: oct_80
-      unit_of_measurement: dB
-      accuracy_decimals: 1
-      update_interval: 1s
-      dsp_filters: [f_ics43434, f_band_80]
+    # Spektrum: 1/3-oktáva 100–250 Hz + oktávy 500 Hz–16 kHz (bez A-vážení)
     - type: eq
       name: 100 Hz
       id: oct_100
